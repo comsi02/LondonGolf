@@ -1,0 +1,51 @@
+config:
+  timezone: US/Eastern
+  url:
+    login: https://city-of-london-golf-courses.book.teeitup.golf/login
+    teetimes: https://city-of-london-golf-courses.book.teeitup.golf
+
+course:
+  CLAS:
+    code: 9710
+    name: Thames Valley Golf Course Classic
+  HKRY: 
+    code: 9710
+    name: Thames Valley Golf Course Classic
+  TRAD:
+    code: 9714
+    name: Fanshawe Valley Golf Course Traditional
+  QURY:
+    code: 9713
+    name: Fanshawe Valley Golf Course The Quarry
+
+authentication:
+  pro_song: 
+    userid: xxxxx@gmail.com
+    password: xxxxx
+  pro_yh:
+    userid: xxxxx@gmail.com
+    password: xxxxx
+    
+#---------------------------------------------------------------------#
+# setting of day_of_the_week:
+#   - book every day:               MON,TUE,WED,THU,FRI,SAT,SUN
+#   - book every Sat and Sun book : SAT,SUN
+#---------------------------------------------------------------------#
+book_schedules:
+  pro_song:
+    - day_of_the_week: MON,TUE,WED,THU,FRI,SAT,SUN
+      book_date: 2023-08-22
+      start_time: "15:00"
+      duration: 30
+      course: QURY
+    - day_of_the_week: MON,TUE,WED,THU,FRI,SAT,SUN
+      book_date: 
+      start_time: "17:00"
+      duration: 30
+      course: HKRY
+  pro_yh:
+    - day_of_the_week: MON,TUE,WED,THU,FRI,SAT,SUN
+      book_date: 
+      start_time: "15:00"
+      duration: 30
+      course: CLAS,HKRY
