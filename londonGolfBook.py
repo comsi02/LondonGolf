@@ -186,10 +186,8 @@ def main():
       driver.find_element(By.NAME, 'chb-nm').click()
 
       WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))).click()
-      WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-another-reservation-btn']"))).click()
 
-      print("sleep1000")
-      time.sleep(1000)
+      time.sleep(1)
 
   except Exception as e:
     traceback_msg = "Traceback: %s" % traceback.format_exc()
