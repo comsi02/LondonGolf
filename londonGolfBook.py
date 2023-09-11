@@ -216,7 +216,7 @@ def main():
       teeTimes = []
 
       idx = 1
-      while idx < 60:#{
+      while idx < 180:#{
         teeTimes = getTeeTimes(courseCode, bookDate)
         if teeTimes:
           LOGGER.info("* [Done] find tee time : %s" % idx)
