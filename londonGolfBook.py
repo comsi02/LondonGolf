@@ -28,7 +28,30 @@ LOGGER = getLogger()
 CONFIG = getConfig()
 BOOK_INTERVAL = 7
 
-def getCartSession(driver):
+def getDriver(isHeadless = False):
+  options = webdriver.ChromeOptions()
+  #options.add_argument('--allow-insecure-localhost')
+  #options.add_argument('--no-sandbox')
+  #options.add_argument('--disable-gpu')
+  if isHeadless:
+    options.add_argument('--headless')
+  #options.add_argument('--disable-dev-shm-usage')
+  #options.add_argument('--allow-running-insecure-content')
+  #options.add_argument('--ignore-certificate-errors')
+
+  seleniumwire_options = {}
+
+  return webdriver.Chrome(options=options, seleniumwire_options=seleniumwire_options)
+
+def doLogin(driver, loginUrl, loginUid, loginPwd):
+  driver.set_window_size(500,1000)
+  driver.get(loginUrl)
+  driver.implicitly_wait(TIMEOUT)
+  WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID,'txtUsername1'))).send_keys(loginUid)
+  WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID,'txtPassword1'))).send_keys(loginPwd)
+  WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.CLASS_NAME,'MuiButton-label'))).click()
+
+def getCartSessionRequest(driver):
   try:
     driver.wait_for_request('https://phx-api-be-east-1b.kenna.io/course',TIMEOUT)
     driver.refresh()
@@ -36,21 +59,29 @@ def getCartSession(driver):
   except TimeoutException as ex:
     LOGGER.info("* Exception has been thrown. " + str(ex))
 
+def getCartSession(driver):
+  return getCartSessionRequest(driver).path.split('/')[-1]
+
 def getLoginSession(driver):
   for request in driver.requests:
     if request.response and request.response.status_code == 200 and request.headers['Session'] != None:
       return request.headers['Session']
 
 def getTeeTimes(course, date):
+  try:
+    headers = { 'X-Be-Alias': 'city-of-london-golf-courses'}
+    res = requests.get("https://phx-api-be-east-1b.kenna.io/v2/tee-times?date={}&facilityIds={}".format(date, course), headers=headers)
 
-  headers = { 'X-Be-Alias': 'city-of-london-golf-courses'}
-  res = requests.get("https://phx-api-be-east-1b.kenna.io/v2/tee-times?date={}&facilityIds={}".format(date, course), headers=headers)
+    result = []
+    for x in res.json()[0]['teetimes']:
+      if x['bookedPlayers'] == 0 and x['maxPlayers'] == 4:
+        result.append(x)
 
-  result = []
-
-  for x in res.json()[0]['teetimes']:
-    if x['bookedPlayers'] == 0 and x['maxPlayers'] == 4:
-     result.append(x)
+  except Exception as e:
+    LOGGER.info("========== Error ==========")
+    LOGGER.info(res.json())
+    LOGGER.info("========== Error ==========")
+    pass
 
   return result
 
@@ -98,6 +129,15 @@ def setLockTeeTime(loginSession, teeTimeInfo):
   LOGGER.info(res)
   LOGGER.info(res.text)
 
+def setReservation(driver):
+  time.sleep(1)
+  driver.refresh()
+  WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='mobile-core-shopping-cart']"))).click()
+  WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))).click()
+  driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
+  driver.find_element(By.NAME, 'chb-nm').click()
+  WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))).click()
+
 def convertTz(inputDt, tz1, tz2):
   tz1 = pytz.timezone(tz1)
   tz2 = pytz.timezone(tz2)
@@ -105,12 +145,21 @@ def convertTz(inputDt, tz1, tz2):
   inputDt = tz1.localize(inputDt)
   return inputDt.astimezone(tz2)
 
+def convertTzEasternToUtc(inputDt):
+  return convertTz(inputDt, 'US/Eastern', 'UTC')
+
+def convertTzUtcToUtc(inputDt):
+  return convertTz(inputDt, 'UTC', 'UTC')
+
 def main():
 
   try:
     LOGGER.info("")
     LOGGER.info("------------- START ------------------")
 
+    #---------------------------------------------------------------#
+    # 0. set parameters
+    #---------------------------------------------------------------#
     parser = argparse.ArgumentParser(prog='London Golf Booking', description='London Golf Booking Batch', epilog='Copyright.2023.Andrew Song.All rights reserved.')
     parser.add_argument('-d', '--debug', required=True, choices=['yes','no'], help='use debug mode')
     parser.add_argument('-t', '--task',  required=True, help='use task name')
@@ -118,76 +167,104 @@ def main():
     args = parser.parse_args()
 
     taskName = args.task
+    loginUrl = CONFIG['config']['url']['login']
+    loginUid = CONFIG['authentication'][taskName]['userid']
+    loginPwd = CONFIG['authentication'][taskName]['password']
+
+    #---------------------------------------------------------------#
+    # 1. getDriver and login
+    #---------------------------------------------------------------#
+    driver = getDriver(False)
+    doLogin(driver, loginUrl, loginUid, loginPwd)
+    LOGGER.info("* [Done] Do login : %s" % loginUid)
+
+    #---------------------------------------------------------------#
+    # 2. get cart session
+    #---------------------------------------------------------------#
+    cartSession = getCartSession(driver)
+    LOGGER.info("* [Done] get cart session : %s" % cartSession)
+
+    #---------------------------------------------------------------#
+    # 3. get login session
+    #---------------------------------------------------------------#
+    loginSession = getLoginSession(driver)
+    LOGGER.info("* [Done] get login session : %s" % loginSession)
+
     selectedTeeTimes = []
 
+    #---------------------------------------------------------------#
+    # 4. select book schedules
+    #---------------------------------------------------------------#
     for x in CONFIG['book_schedules'][taskName]: #{
+
       bookDate = x.get('book_date',None)
       if not bookDate:
         bookDate = (dt.datetime.now() + dt.timedelta(days=BOOK_INTERVAL)).strftime("%Y-%m-%d")
 
       courseCode = CONFIG['course'][x['course']]['code']
-      bookStartTimeUtc = convertTz("{} {}:00".format(bookDate,x['start_time']), 'US/Eastern', 'UTC')
+      courseName = CONFIG['course'][x['course']]['name']
+      bookStartTimeUtc = convertTzEasternToUtc("{} {}:00".format(bookDate,x['start_time']))
       bookEndTimeUtc   = bookStartTimeUtc + dt.timedelta(minutes=x.get('duration',30))
 
-      for x in getTeeTimes(courseCode, bookDate): #{
-        teeTime = convertTz(dt.datetime.strptime(x['teetime'],"%Y-%m-%dT%H:%M:%S.000Z").strftime("%Y-%m-%d %H:%M:%S"),'UTC','UTC')
+      LOGGER.info("############################################")
+      LOGGER.info("* CourseCode : {}".format(courseCode))
+      LOGGER.info("* BookDate   : {}".format(bookDate))
+
+      #---------------------------------------------------------------#
+      # 4-1. wait and get tee time
+      #---------------------------------------------------------------#
+      teeTimes = []
+
+      idx = 1
+      while idx < 60:#{
+        teeTimes = getTeeTimes(courseCode, bookDate)
+        if teeTimes:
+          LOGGER.info("* [Done] find tee time : %s" % idx)
+          break
+        LOGGER.info("* [Proc] Did not find tee time : %s" % idx)
+        idx += 1
+      #} while
+
+      #---------------------------------------------------------------#
+      # 4-2. select tee time
+      #---------------------------------------------------------------#
+      for x in teeTimes: #{
+        teeTime = convertTzUtcToUtc(dt.datetime.strptime(x['teetime'],"%Y-%m-%dT%H:%M:%S.000Z").strftime("%Y-%m-%d %H:%M:%S"))
 
         LOGGER.info("%s <= %s <= %s" % (bookStartTimeUtc, teeTime, bookEndTimeUtc))
 
         if bookStartTimeUtc <= teeTime and teeTime <= bookEndTimeUtc:
+          LOGGER.info("#########################################################")
+          LOGGER.info("* [Done] select tee time : %s" % teeTime)
           LOGGER.info(x)
+          LOGGER.info("#########################################################")
           selectedTeeTimes.append(x)
           break
       #} for
     #} for
 
     if selectedTeeTimes:
-
-      options = webdriver.ChromeOptions()
-      #options.add_argument('--allow-insecure-localhost')
-      #options.add_argument('--no-sandbox')
-      #options.add_argument('--disable-gpu')
-      #options.add_argument('--headless')
-      #options.add_argument('--disable-dev-shm-usage')
-      #options.add_argument('--allow-running-insecure-content')
-      #options.add_argument('--ignore-certificate-errors')
-
-      seleniumwire_options = {}
-      driver = webdriver.Chrome(options=options, seleniumwire_options=seleniumwire_options)
-
-      driver.set_window_size(500,1000)
-      driver.get(CONFIG['config']['url']['login'])
-      driver.implicitly_wait(TIMEOUT)
-
-      WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID,'txtUsername1'))).send_keys(CONFIG['authentication'][taskName]['userid'])
-      WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID,'txtPassword1'))).send_keys(CONFIG['authentication'][taskName]['password'])
-      WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.CLASS_NAME,'MuiButton-label'))).click()
-
-      cartSessionRequest = getCartSession(driver)
-      cartSession = cartSessionRequest.path.split('/')[-1]
-      loginSession = getLoginSession(driver)
-
-      LOGGER.info("Golf API url  : %s" % CONFIG['authentication'][taskName]['userid'])
-      LOGGER.info("Cart Session  : %s" % cartSession)
-      LOGGER.info("Login Session : %s" % loginSession)
-
+      #---------------------------------------------------------------#
+      # 5. set cart and lock
+      #---------------------------------------------------------------#
       for teeTimeInfo in selectedTeeTimes:#{
         setShoppingCart(cartSession, teeTimeInfo)
+        LOGGER.info("* [Done] set shopping cart : %s" % teeTime)
+
         setLockTeeTime(loginSession, teeTimeInfo)
+        LOGGER.info("* [Done] set lock tee time : %s" % teeTime)
       #}
 
-      time.sleep(1)
-      driver.refresh()
+      #---------------------------------------------------------------#
+      # 6. set reservation
+      #---------------------------------------------------------------#
+      setReservation(driver)
+      LOGGER.info("* [Done] set reservation")
 
-      WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='mobile-core-shopping-cart']"))).click()
-      WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))).click()
+      time.sleep(10)
 
-      driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
-      driver.find_element(By.NAME, 'chb-nm').click()
-
-      WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))).click()
-
-      time.sleep(1)
+    LOGGER.info("-------------  END  ------------------")
+    LOGGER.info("")
 
   except Exception as e:
     traceback_msg = "Traceback: %s" % traceback.format_exc()
