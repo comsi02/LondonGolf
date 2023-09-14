@@ -5,7 +5,8 @@ def getLogger():
     import logging
     from logging.handlers import TimedRotatingFileHandler
 
-    logFile = os.path.dirname(os.path.abspath(__file__)) + '/logs/' + os.path.splitext(sys.argv[0])[0] + '.log'
+    logFile = os.path.dirname(os.path.abspath(__file__)) + '/logs/' + os.path.splitext(os.path.basename(sys.argv[0]))[0] + '.log'
+
     if not os.path.isdir(os.path.dirname(logFile)):
         os.makedirs(os.path.dirname(logFile))
     logger = logging.getLogger(__name__)
@@ -25,7 +26,8 @@ def getConfig():
   try:
     import os, sys
     import yaml
-    confFile = os.path.dirname(os.path.abspath(__file__)) + '/' + os.path.splitext(sys.argv[0])[0] + '.yaml'
+    confFile = os.path.dirname(os.path.abspath(__file__)) + '/' + os.path.splitext(os.path.basename(sys.argv[0]))[0] + '.yaml'
+
     with open(confFile, "r") as f:
       return yaml.safe_load(f)
   except yaml.YAMLError as ex:
