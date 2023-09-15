@@ -116,10 +116,7 @@ def setShoppingCart(cartSession, teeTimeInfo):
   }
 
   headers = { 'X-Be-Alias': 'city-of-london-golf-courses'}
-  res = requests.post(LONDON_GOLF_SET_CART.format(cartSession), headers=headers, json=data)
-
-  LOGGER.info(res)
-  LOGGER.info(res.text)
+  return requests.post(LONDON_GOLF_SET_CART.format(cartSession), headers=headers, json=data)
 
 def setLockTeeTime(loginSession, teeTimeInfo):
   data = {
@@ -129,14 +126,12 @@ def setLockTeeTime(loginSession, teeTimeInfo):
   }
 
   headers = { 'X-Be-Alias': 'city-of-london-golf-courses', 'Session': loginSession }
-  res = requests.put(LONDON_GOLF_SET_LOCK.format(teeTimeInfo['courseId']), headers=headers, json=data)
-
-  LOGGER.info(res)
-  LOGGER.info(res.text)
+  return requests.put(LONDON_GOLF_SET_LOCK.format(teeTimeInfo['courseId']), headers=headers, json=data)
 
 def setReservation(driver):
   time.sleep(1)
   driver.refresh()
+  time.sleep(1)
   WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='mobile-core-shopping-cart']"))).click()
   WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))).click()
   driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
@@ -177,12 +172,12 @@ def getBookSchedule(scheduleInfo):
   logArray = [""]
   logArray.append("-" * 100)
   for k,v in scheduleInfo.items():
-    logArray.append(" "*24 + "[{}] * {:<20} : {}".format(c_proc.name,k,v))
+    logArray.append(" "*29 + "[{}] * {:<20} : {}".format(c_proc.name,k,v))
   logArray.append("-" * 100)
   LOGGER.info("\n".join(logArray))
 
   if WEEKDAY[scheduleInfo['bookStartTimeUtc'].weekday()] not in scheduleInfo['weekday']:
-    LOGGER.info("[{}] [{}] {} is not in {}".format(
+    LOGGER.info("  >> [{}] [{}] {} is not in {}".format(
       c_proc.name,
       scheduleInfo['course'],
       WEEKDAY[scheduleInfo['bookStartTimeUtc'].weekday()],
@@ -197,12 +192,12 @@ def getBookSchedule(scheduleInfo):
 
   idx = 1
   while not teeTimes and idx <= MAX_WAIT_TEETIME:#{
-    LOGGER.info("[{}] {} time(s) attempted".format(c_proc.name,idx))
+    LOGGER.info("  >> [{}] {} time(s) attempted".format(c_proc.name,idx))
     teeTimes = getTeeTimes(scheduleInfo['courseCode'], bookDate)
     idx += 1
   #}while
 
-  LOGGER.info("[{}] {} time(s) attempted and found tee times.".format(c_proc.name,idx))
+  LOGGER.info("  >> [{}] {} time(s) attempted and found tee times.".format(c_proc.name,idx))
 
   #---------------------------------------------------------------#
   # 4-2. select tee time
@@ -211,7 +206,7 @@ def getBookSchedule(scheduleInfo):
   for teeTimeInfo in teeTimes: #{
     teeTime = convertTzUtcToUtc(dt.datetime.strptime(teeTimeInfo['teetime'],"%Y-%m-%dT%H:%M:%S.000Z").strftime("%Y-%m-%d %H:%M:%S"))
 
-    logStr = "[{}] [{}] {} <= {} <= {}".format(
+    logStr = "  >> [{}] [{}] {} <= {} <= {}".format(
         c_proc.name,
         scheduleInfo['course'],
         scheduleInfo['bookStartTimeEastern'].strftime("%Y-%m-%d %H:%M"),
@@ -260,19 +255,19 @@ def main():
     #---------------------------------------------------------------#
     driver = getDriver(not debugMode)
     doLogin(driver, LONDON_GOLF_GET_LOGIN, loginUid, loginPwd)
-    LOGGER.info("* [Done] login : %s" % loginUid)
+    LOGGER.info("* [{}] (Done.) login : {}".format(taskName,loginUid))
 
     #---------------------------------------------------------------#
     # 2. get cart session
     #---------------------------------------------------------------#
     cartSession = getCartSession(driver)
-    LOGGER.info("* [Done] get cart session : %s" % cartSession)
+    LOGGER.info("* [{}] (Done.) get cart session : {}".format(taskName,cartSession))
 
     #---------------------------------------------------------------#
     # 3. get login session
     #---------------------------------------------------------------#
     loginSession = getLoginSession(driver)
-    LOGGER.info("* [Done] get login session : %s" % loginSession)
+    LOGGER.info("* [{}] (Done.) get login session : {}".format(taskName,loginSession))
 
     #---------------------------------------------------------------#
     # 4. select book schedules
@@ -288,27 +283,26 @@ def main():
 
     if selectedTeeTimesMerged:#{
       #---------------------------------------------------------------#
-      # 5. set cart and lock
+      # 5. set lock and cart
       #---------------------------------------------------------------#
       for teeTimeInfo in selectedTeeTimesMerged:#{
-        setShoppingCart(cartSession, teeTimeInfo)
-        LOGGER.info("* [Done] set shopping cart [{}] [{}]".format(
-          teeTimeInfo['scheduleInfo']['course'],
-          teeTimeInfo['teetime']
-        ))
 
-        setLockTeeTime(loginSession, teeTimeInfo)
-        LOGGER.info("* [Done] set lock tee time [{}] [{}]".format(
-          teeTimeInfo['scheduleInfo']['course'],
-          teeTimeInfo['teetime']
-        ))
+        LOGGER.info("* [{}] (Start) set lock tee time. [{}]:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['teetime']))
+        res = setLockTeeTime(loginSession, teeTimeInfo)
+        LOGGER.info("* [{}] ( End ) set lock tee time. [{}]:{}:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['teetime'],res))
+
+        LOGGER.info("* [{}] (Start) set shopping cart. [{}]:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['teetime']))
+        res = setShoppingCart(cartSession, teeTimeInfo)
+        LOGGER.info("* [{}] ( End ) set shopping cart. [{}]:{}:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['teetime'],res))
+
       #}for
 
       #---------------------------------------------------------------#
       # 6. set reservation
       #---------------------------------------------------------------#
+      LOGGER.info("* [{}] (Start) set reservation.".format(taskName))
       setReservation(driver)
-      LOGGER.info("* [Done] set reservation")
+      LOGGER.info("* [{}] ( End ) set reservation.".format(taskName))
 
       time.sleep(10)
     #}if
