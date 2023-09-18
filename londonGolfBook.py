@@ -28,7 +28,7 @@ TIMEOUT = 5
 LOGGER = getLogger()
 CONFIG = getConfig()
 BOOK_INTERVAL = 7
-MAX_WAIT_TEETIME = 200
+MAX_WAIT_TEETIME = 500
 WEEKDAY = ['MON','TUE','WED','THU','FRI','SAT','SUN']
 
 LONDON_GOLF_GET_LOGIN = "https://city-of-london-golf-courses.book.teeitup.golf/login"
@@ -195,64 +195,65 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
   #---------------------------------------------------------------#
   # 4-1. wait and get tee time
   #---------------------------------------------------------------#
-  teeTimes = getTeeTimes(scheduleInfo['courseCode'], bookDate)
-  idx = 1
+  flagTeeTime = True
+  idx = 0
 
-  while not teeTimes and idx < MAX_WAIT_TEETIME:#{
-    LOGGER.info("* [{:<10}] [{}] {} time(s) attempted".format(taskName,c_proc.name,idx))
-    teeTimes = getTeeTimes(scheduleInfo['courseCode'], bookDate)
+  while flagTeeTime and idx < MAX_WAIT_TEETIME:#{
     idx += 1
-  #}while
 
-  if teeTimes == None:
-    LOGGER.info("* [{:<10}] [{}] {} time(s) attempted and did not find any teetimes.".format(taskName,c_proc.name,idx))
-    return []
-  else:
-    LOGGER.info("* [{:<10}] [{}] {} time(s) attempted and found tee times.".format(taskName,c_proc.name,idx))
+    teeTimes = getTeeTimes(scheduleInfo['courseCode'], bookDate)
+    LOGGER.info("* [{:<10}] [{}] {} time(s) attempted".format(taskName,c_proc.name,idx))
 
-  #---------------------------------------------------------------#
-  # 4-2. select tee time
-  #---------------------------------------------------------------#
-  selectedTeeTimes = []
-  for teeTimeInfo in teeTimes: #{
-    teeTime = convertTzUtcToUtc(dt.datetime.strptime(teeTimeInfo['teetime'],"%Y-%m-%dT%H:%M:%S.000Z").strftime("%Y-%m-%d %H:%M:%S"))
+    #---------------------------------------------------------------#
+    # 4-2. select tee time
+    #---------------------------------------------------------------#
+    selectedTeeTimes = []
+    for teeTimeInfo in teeTimes: #{
+      teeTime = convertTzUtcToUtc(dt.datetime.strptime(teeTimeInfo['teetime'],"%Y-%m-%dT%H:%M:%S.000Z").strftime("%Y-%m-%d %H:%M:%S"))
 
-    logStr = "* [{:<10}] [{}] [{}] {} <= {} <= {}".format(
-        taskName,
-        c_proc.name,
-        scheduleInfo['course'],
-        scheduleInfo['bookStartTimeEastern'].strftime("%Y-%m-%d %H:%M"),
-        convertTzUtcToEastern(teeTime).strftime("%H:%M"),
-        scheduleInfo['bookEndTimeEastern'].strftime("%H:%M")
-    )
+      logStr = "* [{:<10}] [{}] [{}] {} <= {} <= {}".format(
+          taskName,
+          c_proc.name,
+          scheduleInfo['course'],
+          scheduleInfo['bookStartTimeEastern'].strftime("%Y-%m-%d %H:%M"),
+          convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M"),
+          scheduleInfo['bookEndTimeEastern'].strftime("%Y-%m-%d %H:%M")
+      )
 
-    if scheduleInfo['bookStartTimeUtc'] <= teeTime and teeTime <= scheduleInfo['bookEndTimeUtc']:
+      if scheduleInfo['bookStartTimeUtc'] <= teeTime and teeTime <= scheduleInfo['bookEndTimeUtc']:
 
-      redisVaildationKey = "{}:{}".format(teeTimeInfo['rates'][0]['_id'],convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M:%S"))
-      redisRes = redisConnection.get(redisVaildationKey)
+        redisVaildationKey = "{}:{}".format(teeTimeInfo['rates'][0]['_id'],convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M:%S"))
+        redisRes = redisConnection.get(redisVaildationKey)
 
-      if len(selectedTeeTimes) < scheduleInfo['book_count'] and redisRes == None:
-        scheduleInfo['teeTimeEastern'] = convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M")
-        teeTimeInfo['scheduleInfo'] = scheduleInfo
+        if len(selectedTeeTimes) < scheduleInfo['book_count'] and redisRes == None:
+          scheduleInfo['teeTimeEastern'] = convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M")
+          teeTimeInfo['scheduleInfo'] = scheduleInfo
 
-        selectedTeeTimes.append(teeTimeInfo)
-        redisConnection.set(redisVaildationKey,"OK")
-        redisConnection.expire(redisVaildationKey,60)
+          selectedTeeTimes.append(teeTimeInfo)
+          redisConnection.set(redisVaildationKey,"OK")
+          redisConnection.expire(redisVaildationKey,300)
 
-        #---------------------------------------------------------------#
-        # 4-3. set lock and cart
-        #---------------------------------------------------------------#
-        lockRes = setLockTeeTime(loginSession, teeTimeInfo)
-        cartRes = setShoppingCart(cartSession, teeTimeInfo)
-        LOGGER.info(logStr + " [Vaild] [Selected] [lock:{} & cart:{}]".format(lockRes.status_code,cartRes.status_code))
-      else:
-        if redisRes == None:
-          LOGGER.info(logStr + " [Vaild]")
+          #---------------------------------------------------------------#
+          # 4-3. set lock and cart
+          #---------------------------------------------------------------#
+          lockRes = setLockTeeTime(loginSession, teeTimeInfo)
+          cartRes = setShoppingCart(cartSession, teeTimeInfo)
+          flagTeeTime = False
+          LOGGER.info(logStr + " [Vaild] [Selected] [lock:{} & cart:{}]".format(lockRes.status_code,cartRes.status_code))
         else:
-          LOGGER.info(logStr + " [Vaild] [Redis]")
+          if redisRes == None:
+            LOGGER.info(logStr + " [Vaild]")
+          else:
+            LOGGER.info(logStr + " [Vaild] [Redis]")
+      else:
+        LOGGER.info(logStr)
+    #}for
+
+    if len(teeTimes) > 0:
+      time.sleep(1)
     else:
-      LOGGER.info(logStr)
-  #}for
+      time.sleep(0.5)
+  #}while
 
   return selectedTeeTimes
 
@@ -303,14 +304,15 @@ def main():
     #---------------------------------------------------------------#
     p = Pool(mp.cpu_count())
 
-    selectedTeeTimes = []
+    flagReservation = False
     for scheduleInfo in CONFIG['book_schedules'][taskName]:
-      selectedTeeTimes.append(p.apply_async(getBookSchedule, (scheduleInfo,taskName,cartSession,loginSession)))
+      if len((p.apply_async(getBookSchedule, (scheduleInfo,taskName,cartSession,loginSession))).get()) > 0:
+        flagReservation = True
 
     p.close()
     p.join()
 
-    if selectedTeeTimes:#{
+    if flagReservation:#{
       #---------------------------------------------------------------#
       # 6. set reservation
       #---------------------------------------------------------------#
