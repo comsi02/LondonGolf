@@ -14,6 +14,7 @@ import datetime as dt
 import pytz
 import argparse
 import multiprocessing as mp
+import redis
 from multiprocessing import Pool
 
 from seleniumwire import webdriver
@@ -158,8 +159,9 @@ def convertTzUtcToEastern(inputDt):
 def convertTzUtcToUtc(inputDt):
   return convertTz(inputDt, 'UTC', 'UTC')
 
-def getBookSchedule(scheduleInfo):
+def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
 
+  redisConnection = redis.Redis(host='localhost', port=6379, decode_responses=True)
   c_proc = mp.current_process()
 
   bookDate = scheduleInfo.get('book_date',None)
@@ -176,12 +178,13 @@ def getBookSchedule(scheduleInfo):
   logArray = [""]
   logArray.append("-" * 100)
   for k,v in scheduleInfo.items():
-    logArray.append(" "*29 + "[{}] * {:<20} : {}".format(c_proc.name,k,v))
+    logArray.append(" "*26 + "[{:<10}] [{}] * {:<20} : {}".format(taskName,c_proc.name,k,v))
   logArray.append("-" * 100)
   LOGGER.info("\n".join(logArray))
 
   if WEEKDAY[scheduleInfo['bookStartTimeUtc'].weekday()] not in scheduleInfo['weekday']:
-    LOGGER.info("  >> [{}] [{}] {} is not in {}".format(
+    LOGGER.info("* [{:<10}] [{}] [{}] {} is not in {}".format(
+      taskName,
       c_proc.name,
       scheduleInfo['course'],
       WEEKDAY[scheduleInfo['bookStartTimeUtc'].weekday()],
@@ -193,15 +196,19 @@ def getBookSchedule(scheduleInfo):
   # 4-1. wait and get tee time
   #---------------------------------------------------------------#
   teeTimes = getTeeTimes(scheduleInfo['courseCode'], bookDate)
-
   idx = 1
-  while not teeTimes and idx <= MAX_WAIT_TEETIME:#{
-    LOGGER.info("  >> [{}] {} time(s) attempted".format(c_proc.name,idx))
+
+  while not teeTimes and idx < MAX_WAIT_TEETIME:#{
+    LOGGER.info("* [{:<10}] [{}] {} time(s) attempted".format(taskName,c_proc.name,idx))
     teeTimes = getTeeTimes(scheduleInfo['courseCode'], bookDate)
     idx += 1
   #}while
 
-  LOGGER.info("  >> [{}] {} time(s) attempted and found tee times.".format(c_proc.name,idx))
+  if teeTimes == None:
+    LOGGER.info("* [{:<10}] [{}] {} time(s) attempted and did not find any teetimes.".format(taskName,c_proc.name,idx))
+    return []
+  else:
+    LOGGER.info("* [{:<10}] [{}] {} time(s) attempted and found tee times.".format(taskName,c_proc.name,idx))
 
   #---------------------------------------------------------------#
   # 4-2. select tee time
@@ -210,22 +217,39 @@ def getBookSchedule(scheduleInfo):
   for teeTimeInfo in teeTimes: #{
     teeTime = convertTzUtcToUtc(dt.datetime.strptime(teeTimeInfo['teetime'],"%Y-%m-%dT%H:%M:%S.000Z").strftime("%Y-%m-%d %H:%M:%S"))
 
-    logStr = "  >> [{}] [{}] {} <= {} <= {}".format(
+    logStr = "* [{:<10}] [{}] [{}] {} <= {} <= {}".format(
+        taskName,
         c_proc.name,
         scheduleInfo['course'],
         scheduleInfo['bookStartTimeEastern'].strftime("%Y-%m-%d %H:%M"),
-        convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M"),
-        scheduleInfo['bookEndTimeEastern'].strftime("%Y-%m-%d %H:%M")
+        convertTzUtcToEastern(teeTime).strftime("%H:%M"),
+        scheduleInfo['bookEndTimeEastern'].strftime("%H:%M")
     )
 
     if scheduleInfo['bookStartTimeUtc'] <= teeTime and teeTime <= scheduleInfo['bookEndTimeUtc']:
-      if len(selectedTeeTimes) < scheduleInfo['book_count']:
-        LOGGER.info(logStr + " [Vaild] [Selected]")
+
+      redisVaildationKey = "{}:{}".format(teeTimeInfo['rates'][0]['_id'],convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M:%S"))
+      redisRes = redisConnection.get(redisVaildationKey)
+
+      if len(selectedTeeTimes) < scheduleInfo['book_count'] and redisRes == None:
         scheduleInfo['teeTimeEastern'] = convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M")
         teeTimeInfo['scheduleInfo'] = scheduleInfo
+
         selectedTeeTimes.append(teeTimeInfo)
+        redisConnection.set(redisVaildationKey,"OK")
+        redisConnection.expire(redisVaildationKey,60)
+
+        #---------------------------------------------------------------#
+        # 4-3. set lock and cart
+        #---------------------------------------------------------------#
+        lockRes = setLockTeeTime(loginSession, teeTimeInfo)
+        cartRes = setShoppingCart(cartSession, teeTimeInfo)
+        LOGGER.info(logStr + " [Vaild] [Selected] [lock:{} & cart:{}]".format(lockRes.status_code,cartRes.status_code))
       else:
-        LOGGER.info(logStr + " [Vaild]")
+        if redisRes == None:
+          LOGGER.info(logStr + " [Vaild]")
+        else:
+          LOGGER.info(logStr + " [Vaild] [Redis]")
     else:
       LOGGER.info(logStr)
   #}for
@@ -260,55 +284,39 @@ def main():
     #---------------------------------------------------------------#
     driver = getDriver(not debugMode)
     doLogin(driver, LONDON_GOLF_GET_LOGIN, loginUid, loginPwd)
-    LOGGER.info("* [{}] (Done.) login : {}".format(taskName,loginUid))
+    LOGGER.info("* [{:<10}] (Done.) login : {}".format(taskName,loginUid))
 
     #---------------------------------------------------------------#
     # 2. get cart session
     #---------------------------------------------------------------#
     cartSession = getCartSession(driver)
-    LOGGER.info("* [{}] (Done.) get cart session : {}".format(taskName,cartSession))
+    LOGGER.info("* [{:<10}] (Done.) get cart session : {}".format(taskName,cartSession))
 
     #---------------------------------------------------------------#
     # 3. get login session
     #---------------------------------------------------------------#
     loginSession = getLoginSession(driver)
-    LOGGER.info("* [{}] (Done.) get login session : {}".format(taskName,loginSession))
+    LOGGER.info("* [{:<10}] (Done.) get login session : {}...{}".format(taskName,loginSession[:20],loginSession[-20:]))
 
     #---------------------------------------------------------------#
     # 4. select book schedules
     #---------------------------------------------------------------#
     p = Pool(mp.cpu_count())
-    selectedTeeTimes = p.map_async(getBookSchedule, CONFIG['book_schedules'][taskName])
+
+    selectedTeeTimes = []
+    for scheduleInfo in CONFIG['book_schedules'][taskName]:
+      selectedTeeTimes.append(p.apply_async(getBookSchedule, (scheduleInfo,taskName,cartSession,loginSession)))
+
     p.close()
     p.join()
 
-    selectedTeeTimesMerged = []
-    for l in selectedTeeTimes.get():
-      selectedTeeTimesMerged += l
-
-    if selectedTeeTimesMerged:#{
-      #---------------------------------------------------------------#
-      # 5. set lock and cart
-      #---------------------------------------------------------------#
-      for teeTimeInfo in selectedTeeTimesMerged:#{
-
-        LOGGER.info("* [{}] (Start) set lock tee time. [{}]:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['scheduleInfo']['teeTimeEastern']))
-        res = setLockTeeTime(loginSession, teeTimeInfo)
-        LOGGER.info("* [{}] ( End ) set lock tee time. [{}]:{}:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['scheduleInfo']['teeTimeEastern'],res))
-
-        LOGGER.info("* [{}] (Start) set shopping cart. [{}]:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['scheduleInfo']['teeTimeEastern']))
-        res = setShoppingCart(cartSession, teeTimeInfo)
-        LOGGER.info("* [{}] ( End ) set shopping cart. [{}]:{}:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['scheduleInfo']['teeTimeEastern'],res))
-
-      #}for
-
+    if selectedTeeTimes:#{
       #---------------------------------------------------------------#
       # 6. set reservation
       #---------------------------------------------------------------#
-      LOGGER.info("* [{}] (Start) set reservation.".format(taskName))
+      LOGGER.info("* [{:<10}] (Start) set reservation.".format(taskName))
       setReservation(driver)
-      LOGGER.info("* [{}] ( End ) set reservation.".format(taskName))
-
+      LOGGER.info("* [{:<10}] (Done.) set reservation.".format(taskName))
       time.sleep(10)
     #}if
 
