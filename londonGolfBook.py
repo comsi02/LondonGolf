@@ -139,6 +139,10 @@ def setReservation(driver):
   WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))).click()
 
 def convertTz(inputDt, tz1, tz2):
+
+  if type(inputDt) == dt.datetime:
+    inputDt = inputDt.strftime("%Y-%m-%d %H:%M:%S")
+
   tz1 = pytz.timezone(tz1)
   tz2 = pytz.timezone(tz2)
   inputDt = dt.datetime.strptime(inputDt,"%Y-%m-%d %H:%M:%S")
@@ -164,8 +168,8 @@ def getBookSchedule(scheduleInfo):
 
   scheduleInfo['bookStartTimeUtc'] = convertTzEasternToUtc("{} {}:00".format(bookDate,scheduleInfo['start_time']))
   scheduleInfo['bookEndTimeUtc']   = scheduleInfo['bookStartTimeUtc'] + dt.timedelta(minutes=scheduleInfo.get('duration',30))
-  scheduleInfo['bookStartTimeEastern'] = convertTzUtcToEastern(scheduleInfo['bookStartTimeUtc'].strftime("%Y-%m-%d %H:%M:%S"))
-  scheduleInfo['bookEndTimeEastern']   = convertTzUtcToEastern(scheduleInfo['bookEndTimeUtc'].strftime("%Y-%m-%d %H:%M:%S"))
+  scheduleInfo['bookStartTimeEastern'] = convertTzUtcToEastern(scheduleInfo['bookStartTimeUtc'])
+  scheduleInfo['bookEndTimeEastern']   = convertTzUtcToEastern(scheduleInfo['bookEndTimeUtc'])
   scheduleInfo['courseCode'] = CONFIG['course'][scheduleInfo['course']]['code']
   scheduleInfo['courseName'] = CONFIG['course'][scheduleInfo['course']]['name']
 
@@ -210,13 +214,14 @@ def getBookSchedule(scheduleInfo):
         c_proc.name,
         scheduleInfo['course'],
         scheduleInfo['bookStartTimeEastern'].strftime("%Y-%m-%d %H:%M"),
-        convertTzUtcToEastern(teeTime.strftime("%Y-%m-%d %H:%M:%S")).strftime("%Y-%m-%d %H:%M"),
+        convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M"),
         scheduleInfo['bookEndTimeEastern'].strftime("%Y-%m-%d %H:%M")
     )
 
     if scheduleInfo['bookStartTimeUtc'] <= teeTime and teeTime <= scheduleInfo['bookEndTimeUtc']:
       if len(selectedTeeTimes) < scheduleInfo['book_count']:
         LOGGER.info(logStr + " [Vaild] [Selected]")
+        scheduleInfo['teeTimeEastern'] = convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M")
         teeTimeInfo['scheduleInfo'] = scheduleInfo
         selectedTeeTimes.append(teeTimeInfo)
       else:
@@ -287,13 +292,13 @@ def main():
       #---------------------------------------------------------------#
       for teeTimeInfo in selectedTeeTimesMerged:#{
 
-        LOGGER.info("* [{}] (Start) set lock tee time. [{}]:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['teetime']))
+        LOGGER.info("* [{}] (Start) set lock tee time. [{}]:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['scheduleInfo']['teeTimeEastern']))
         res = setLockTeeTime(loginSession, teeTimeInfo)
-        LOGGER.info("* [{}] ( End ) set lock tee time. [{}]:{}:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['teetime'],res))
+        LOGGER.info("* [{}] ( End ) set lock tee time. [{}]:{}:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['scheduleInfo']['teeTimeEastern'],res))
 
-        LOGGER.info("* [{}] (Start) set shopping cart. [{}]:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['teetime']))
+        LOGGER.info("* [{}] (Start) set shopping cart. [{}]:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['scheduleInfo']['teeTimeEastern']))
         res = setShoppingCart(cartSession, teeTimeInfo)
-        LOGGER.info("* [{}] ( End ) set shopping cart. [{}]:{}:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['teetime'],res))
+        LOGGER.info("* [{}] ( End ) set shopping cart. [{}]:{}:{}".format(taskName,teeTimeInfo['scheduleInfo']['course'],teeTimeInfo['scheduleInfo']['teeTimeEastern'],res))
 
       #}for
 
