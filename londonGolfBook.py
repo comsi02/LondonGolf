@@ -28,7 +28,7 @@ TIMEOUT = 5
 LOGGER = getLogger()
 CONFIG = getConfig()
 BOOK_INTERVAL = 7
-MAX_WAIT_TEETIME = 500
+MAX_WAIT_TEETIME = 100
 WEEKDAY = ['MON','TUE','WED','THU','FRI','SAT','SUN']
 
 LONDON_GOLF_GET_LOGIN = "https://city-of-london-golf-courses.book.teeitup.golf/login"
@@ -305,12 +305,16 @@ def main():
     p = Pool(mp.cpu_count())
 
     flagReservation = False
+
     for scheduleInfo in CONFIG['book_schedules'][taskName]:
-      if len((p.apply_async(getBookSchedule, (scheduleInfo,taskName,cartSession,loginSession))).get()) > 0:
-        flagReservation = True
+      multiProcessResult = p.apply_async(getBookSchedule, (scheduleInfo,taskName,cartSession,loginSession))
 
     p.close()
     p.join()
+
+    for m in multiProcessResult.get():
+      if len(m) > 0:
+        flagReservation = True
 
     if flagReservation:#{
       #---------------------------------------------------------------#
