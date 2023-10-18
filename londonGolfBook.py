@@ -1,13 +1,4 @@
 # -*- coding:utf-8 -*-
-# ------------------------------------------------------------------------------
-# https://www.selenium.dev/selenium/docs/api/py/api.html#common
-# https://pypi.org/project/selenium-wire/#request-objects
-# https://gist.github.com/mcchae/c9323d426aba8fcde3c1b54731f6cfbe
-#
-# --------- API ----------------------------------------------------------------
-# https://phx-api-be-east-1b.kenna.io/v2/tee-times?date=2023-07-01&facilityIds=9710
-# ------------------------------------------------------------------------------
-
 import sys,time, traceback
 import requests
 import datetime as dt
@@ -24,12 +15,13 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 from common import *
 
-TIMEOUT = 5
+TIMEOUT = 10
 LOGGER = getLogger()
 CONFIG = getConfig()
 BOOK_INTERVAL = 7
 MAX_WAIT_TEETIME = 100
 WEEKDAY = ['MON','TUE','WED','THU','FRI','SAT','SUN']
+HEADERS = {'X-Be-Alias': 'city-of-london-golf-courses'}
 
 LONDON_GOLF_GET_LOGIN = "https://city-of-london-golf-courses.book.teeitup.golf/login"
 LONDON_GOLF_GET_COURSE = "https://phx-api-be-east-1b.kenna.io/course"
@@ -57,9 +49,9 @@ def doLogin(driver, loginUrl, loginUid, loginPwd):
   driver.set_window_size(500,1000)
   driver.get(loginUrl)
   driver.implicitly_wait(TIMEOUT)
-  WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID,'txtUsername1'))).send_keys(loginUid)
-  WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID,'txtPassword1'))).send_keys(loginPwd)
-  WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.CLASS_NAME,'MuiButton-label'))).click()
+  WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, "//input[@data-testid='login-email-component']"))).send_keys(loginUid)
+  WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, "//input[@data-testid='login-password-component']"))).send_keys(loginPwd)
+  WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='login-button']"))).click()
 
 def getCartSessionRequest(driver):
   try:
@@ -79,8 +71,7 @@ def getLoginSession(driver):
 
 def getTeeTimes(course, date):
   try:
-    headers = { 'X-Be-Alias': 'city-of-london-golf-courses'}
-    res = requests.get(LONDON_GOLF_GET_TEE_TIME.format(date, course), headers=headers)
+    res = requests.get(LONDON_GOLF_GET_TEE_TIME.format(date, course), headers=HEADERS)
 
     result = []
     for x in res.json()[0]['teetimes']:
@@ -116,8 +107,7 @@ def setShoppingCart(cartSession, teeTimeInfo):
     }
   }
 
-  headers = { 'X-Be-Alias': 'city-of-london-golf-courses'}
-  return requests.post(LONDON_GOLF_SET_CART.format(cartSession), headers=headers, json=data)
+  return requests.post(LONDON_GOLF_SET_CART.format(cartSession), headers=HEADERS, json=data)
 
 def setLockTeeTime(loginSession, teeTimeInfo):
   data = {
@@ -126,18 +116,19 @@ def setLockTeeTime(loginSession, teeTimeInfo):
     "expiresIn": 5
   }
 
-  headers = { 'X-Be-Alias': 'city-of-london-golf-courses', 'Session': loginSession }
+  headers = HEADERS;
+  headers['Session'] = loginSession
   return requests.put(LONDON_GOLF_SET_LOCK.format(teeTimeInfo['courseId']), headers=headers, json=data)
 
 def setReservation(driver):
-  time.sleep(1)
+  driver.implicitly_wait(TIMEOUT)
   driver.refresh()
-  time.sleep(1)
-  WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='mobile-core-shopping-cart']"))).click()
-  WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))).click()
+  driver.implicitly_wait(TIMEOUT)
+  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='mobile-core-shopping-cart']"))).click()
+  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))).click()
   driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
   driver.find_element(By.NAME, 'chb-nm').click()
-  WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))).click()
+  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))).click()
 
 def convertTz(inputDt, tz1, tz2):
 
@@ -305,16 +296,18 @@ def main():
     p = Pool(mp.cpu_count())
 
     flagReservation = False
+    multiProcessResult = []
 
     for scheduleInfo in CONFIG['book_schedules'][taskName]:
-      multiProcessResult = p.apply_async(getBookSchedule, (scheduleInfo,taskName,cartSession,loginSession))
+      multiProcessResult.append(p.apply_async(getBookSchedule,(scheduleInfo,taskName,cartSession,loginSession)))
 
     p.close()
     p.join()
 
-    for m in multiProcessResult.get():
-      if len(m) > 0:
+    for m in multiProcessResult:
+      for r in m.get():
         flagReservation = True
+        break
 
     if flagReservation:#{
       #---------------------------------------------------------------#
