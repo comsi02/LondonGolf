@@ -6,6 +6,7 @@ import pytz
 import argparse
 import multiprocessing as mp
 import redis
+import random
 from multiprocessing import Pool
 
 from seleniumwire import webdriver
@@ -59,7 +60,7 @@ def getCartSessionRequest(driver):
     driver.refresh()
     return driver.wait_for_request(LONDON_GOLF_GET_CART,TIMEOUT)
   except TimeoutException as ex:
-    LOGGER.info("* Exception has been thrown. " + str(ex))
+    LOGGER.info(f"* Exception has been thrown. {str(ex)}")
 
 def getCartSession(driver):
   return getCartSessionRequest(driver).path.split('/')[-1]
@@ -72,18 +73,11 @@ def getLoginSession(driver):
 def getTeeTimes(course, date):
   try:
     res = requests.get(LONDON_GOLF_GET_TEE_TIME.format(date, course), headers=HEADERS)
-
-    result = []
-    for x in res.json()[0]['teetimes']:
-      if x['bookedPlayers'] == 0 and x['maxPlayers'] == 4:
-        result.append(x)
-
+    result = [ x for x in res.json()[0]['teetimes'] if x['bookedPlayers'] == 0 and x['maxPlayers'] == 4 ]
   except Exception as e:
     LOGGER.info("========== Error ==========")
     LOGGER.info(res.json())
     LOGGER.info("========== Error ==========")
-    pass
-
   return result
 
 def setShoppingCart(cartSession, teeTimeInfo):
@@ -121,7 +115,6 @@ def setLockTeeTime(loginSession, teeTimeInfo):
   return requests.put(LONDON_GOLF_SET_LOCK.format(teeTimeInfo['courseId']), headers=headers, json=data)
 
 def setReservation(driver):
-  driver.implicitly_wait(TIMEOUT)
   driver.refresh()
   driver.implicitly_wait(TIMEOUT)
   WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='mobile-core-shopping-cart']"))).click()
@@ -155,21 +148,20 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
   redisConnection = redis.Redis(host='localhost', port=6379, decode_responses=True)
   c_proc = mp.current_process()
 
-  bookDate = scheduleInfo.get('book_date',None)
-  if not bookDate:
-    bookDate = (dt.datetime.now() + dt.timedelta(days=BOOK_INTERVAL)).strftime("%Y-%m-%d")
-
-  scheduleInfo['bookStartTimeUtc'] = convertTzEasternToUtc("{} {}:00".format(bookDate,scheduleInfo['start_time']))
+  bookDate = scheduleInfo.get('book_date',None) or (dt.datetime.now() + dt.timedelta(days=BOOK_INTERVAL)).strftime("%Y-%m-%d")
+  scheduleInfo['bufferTime'] = random.randrange(0, scheduleInfo.get('buffer',0) + 1)
+  scheduleInfo['bookStartTimeUtc'] = convertTzEasternToUtc(f"{bookDate} {scheduleInfo['start_time']}:00") + dt.timedelta(minutes=scheduleInfo['bufferTime'])
   scheduleInfo['bookEndTimeUtc']   = scheduleInfo['bookStartTimeUtc'] + dt.timedelta(minutes=scheduleInfo.get('duration',30))
   scheduleInfo['bookStartTimeEastern'] = convertTzUtcToEastern(scheduleInfo['bookStartTimeUtc'])
   scheduleInfo['bookEndTimeEastern']   = convertTzUtcToEastern(scheduleInfo['bookEndTimeUtc'])
   scheduleInfo['courseCode'] = CONFIG['course'][scheduleInfo['course']]['code']
   scheduleInfo['courseName'] = CONFIG['course'][scheduleInfo['course']]['name']
 
-  logArray = [""]
-  logArray.append("-" * 100)
-  for k,v in scheduleInfo.items():
-    logArray.append(" "*26 + "[{:<10}] [{}] * {:<20} : {}".format(taskName,c_proc.name,k,v))
+  logArray = ["", "-" * 100]
+  logArray.extend(
+      " " * 26 +
+      "[{:<10}] [{}] * {:<20} : {}".format(taskName, c_proc.name, k, v)
+      for k, v in scheduleInfo.items())
   logArray.append("-" * 100)
   LOGGER.info("\n".join(logArray))
 
@@ -211,12 +203,12 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
           scheduleInfo['bookEndTimeEastern'].strftime("%Y-%m-%d %H:%M")
       )
 
-      if scheduleInfo['bookStartTimeUtc'] <= teeTime and teeTime <= scheduleInfo['bookEndTimeUtc']:
+      if (scheduleInfo['bookStartTimeUtc'] <= teeTime <= scheduleInfo['bookEndTimeUtc']):
 
-        redisVaildationKey = "{}:{}".format(teeTimeInfo['rates'][0]['_id'],convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M:%S"))
+        redisVaildationKey = f"""{teeTimeInfo['rates'][0]['_id']}:{convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M:%S")}"""
         redisRes = redisConnection.get(redisVaildationKey)
 
-        if len(selectedTeeTimes) < scheduleInfo['book_count'] and redisRes == None:
+        if (len(selectedTeeTimes) < scheduleInfo['book_count'] and redisRes is None):
           scheduleInfo['teeTimeEastern'] = convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M")
           teeTimeInfo['scheduleInfo'] = scheduleInfo
 
@@ -230,12 +222,13 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
           lockRes = setLockTeeTime(loginSession, teeTimeInfo)
           cartRes = setShoppingCart(cartSession, teeTimeInfo)
           flagTeeTime = False
-          LOGGER.info(logStr + " [Vaild] [Selected] [lock:{} & cart:{}]".format(lockRes.status_code,cartRes.status_code))
+          LOGGER.info(
+              f"{logStr} [Valid] [Selected] [lock:{lockRes.status_code} & cart:{cartRes.status_code}]"
+          )
+        elif redisRes is None:
+          LOGGER.info(f"{logStr} [Valid]")
         else:
-          if redisRes == None:
-            LOGGER.info(logStr + " [Vaild]")
-          else:
-            LOGGER.info(logStr + " [Vaild] [Redis]")
+          LOGGER.info(f"{logStr} [Valid] [Redis]")
       else:
         LOGGER.info(logStr)
     #}for
@@ -251,6 +244,7 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
 def main():
 
   try:
+
     LOGGER.info("")
     LOGGER.info("#---------------------------------------------------#")
     LOGGER.info("#                     START                         #")
