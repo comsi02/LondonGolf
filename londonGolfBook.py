@@ -20,7 +20,7 @@ TIMEOUT = 10
 LOGGER = getLogger()
 CONFIG = getConfig()
 BOOK_INTERVAL = 7
-MAX_WAIT_TEETIME = 100
+MAX_WAIT_TEETIME = 600
 WEEKDAY = ['MON','TUE','WED','THU','FRI','SAT','SUN']
 HEADERS = {'X-Be-Alias': 'city-of-london-golf-courses'}
 
@@ -234,9 +234,10 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
     #}for
 
     if len(teeTimes) > 0:
-      time.sleep(1)
-    else:
       time.sleep(0.5)
+      idx += 60
+    else:
+      time.sleep(1)
   #}while
 
   return selectedTeeTimes
