@@ -158,10 +158,7 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
   scheduleInfo['courseName'] = CONFIG['course'][scheduleInfo['course']]['name']
 
   logArray = ["", "-" * 100]
-  logArray.extend(
-      " " * 26 +
-      "[{:<10}] [{}] * {:<20} : {}".format(taskName, c_proc.name, k, v)
-      for k, v in scheduleInfo.items())
+  logArray.extend( " " * 26 + "[{:<10}] [{}] * {:<20} : {}".format(taskName, c_proc.name, k, v) for k, v in scheduleInfo.items())
   logArray.append("-" * 100)
   LOGGER.info("\n".join(logArray))
 
@@ -263,8 +260,8 @@ def main():
 
     taskName = args.task
     debugMode = True if args.debug == 'yes' else False
-    loginUid = CONFIG['authentication'][taskName]['userid']
-    loginPwd = CONFIG['authentication'][taskName]['password']
+    loginUid = CONFIG['authentication'][CONFIG['schedule'][taskName]['auth']]['userid']
+    loginPwd = CONFIG['authentication'][CONFIG['schedule'][taskName]['auth']]['password']
 
     #---------------------------------------------------------------#
     # 1. getDriver and login
@@ -293,7 +290,7 @@ def main():
     flagReservation = False
     multiProcessResult = []
 
-    for scheduleInfo in CONFIG['book_schedules'][taskName]:
+    for scheduleInfo in CONFIG['schedule'][taskName]['tasks']:
       multiProcessResult.append(p.apply_async(getBookSchedule,(scheduleInfo,taskName,cartSession,loginSession)))
 
     p.close()

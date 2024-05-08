@@ -20,10 +20,10 @@ course:
 #   - city of London userid and password
 #---------------------------------------------------------------------#
 authentication:
-  pro_song: 
+  userinfo1: 
     userid: xxxxx@gmail.com
     password: xxxxx
-  pro_yh:
+  userinfo2:
     userid: xxxxx@gmail.com
     password: xxxxx
     
@@ -37,17 +37,21 @@ authentication:
 #   - input the date you want into book_date field
 #   - ex) book_date: 2023-09-11
 #---------------------------------------------------------------------#
-book_schedules:
+schedule:
   pro_song:
-    - weekday: MON,TUE,WED,THU,FRI,SAT,SUN
-      book_date:
-      book_count: 1
-      start_time: "14:00"
-      duration: 60
-      course: TRAD
-    - weekday: MON,TUE,WED,THU,FRI,SAT,SUN
-      book_date:
-      book_count: 1
-      start_time: "14:00"
-      duration: 60
-      course: QURY
+    auth: userinfo1
+    tasks:
+      - weekday: MON,TUE,WED,THU,FRI,SAT,SUN
+        book_date:
+        book_count: 1
+        start_time: "14:00"
+        duration: 60
+        buffer: 0
+        course: TRAD
+      - weekday: MON,TUE,WED,THU,FRI,SAT,SUN
+        book_date:
+        book_count: 1
+        start_time: "14:00"
+        duration: 60
+        buffer: 0        
+        course: QURY
