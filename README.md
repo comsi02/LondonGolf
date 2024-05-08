@@ -33,6 +33,14 @@ gpgkey=https://dl-ssl.google.com/linux/linux_signing_key.pub
 
 - pip install -r requirements.txt
 
+# redis6 서비스 등록
+- sudo yum install redis6
+- sudo systemctl enable redis6.service
+
+# cron 서비스 등록
+- sudo yum install cronie -y
+- sudo systemctl enable crond.service
+
 # 참고
 - https://www.selenium.dev/selenium/docs/api/py/api.html#common
 - https://pypi.org/project/selenium-wire/#request-objects
