@@ -16,9 +16,10 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 from common import *
 
-TIMEOUT = 10
 LOGGER = getLogger()
 CONFIG = getConfig()
+
+TIMEOUT = 10
 BOOK_INTERVAL = 7
 MAX_WAIT_TEETIME = 600
 WEEKDAY = ['MON','TUE','WED','THU','FRI','SAT','SUN']
@@ -154,8 +155,10 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
   scheduleInfo['bookEndTimeUtc']   = scheduleInfo['bookStartTimeUtc'] + dt.timedelta(minutes=scheduleInfo.get('duration',30))
   scheduleInfo['bookStartTimeEastern'] = convertTzUtcToEastern(scheduleInfo['bookStartTimeUtc'])
   scheduleInfo['bookEndTimeEastern']   = convertTzUtcToEastern(scheduleInfo['bookEndTimeUtc'])
-  scheduleInfo['courseCode'] = CONFIG['course'][scheduleInfo['course']]['code']
-  scheduleInfo['courseName'] = CONFIG['course'][scheduleInfo['course']]['name']
+
+  course = random.choice(scheduleInfo['course'])
+  scheduleInfo['courseCode'] = CONFIG['course'][course]['code']
+  scheduleInfo['courseName'] = CONFIG['course'][course]['name']
 
   logArray = ["", "-" * 100]
   logArray.extend( " " * 26 + "[{:<10}] [{}] * {:<20} : {}".format(taskName, c_proc.name, k, v) for k, v in scheduleInfo.items())
@@ -166,7 +169,7 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
     LOGGER.info("* [{:<10}] [{}] [{}] {} is not in {}".format(
       taskName,
       c_proc.name,
-      scheduleInfo['course'],
+      course,
       WEEKDAY[scheduleInfo['bookStartTimeUtc'].weekday()],
       scheduleInfo['weekday']
     ))

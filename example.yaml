@@ -47,11 +47,13 @@ schedule:
         start_time: "14:00"
         duration: 60
         buffer: 0
-        course: TRAD
+        course:
+          - TRAD
       - weekday: MON,TUE,WED,THU,FRI,SAT,SUN
         book_date:
         book_count: 1
         start_time: "14:00"
         duration: 60
         buffer: 0        
-        course: QURY
+        course:
+          - QURY
