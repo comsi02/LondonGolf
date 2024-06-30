@@ -156,9 +156,9 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
   scheduleInfo['bookStartTimeEastern'] = convertTzUtcToEastern(scheduleInfo['bookStartTimeUtc'])
   scheduleInfo['bookEndTimeEastern']   = convertTzUtcToEastern(scheduleInfo['bookEndTimeUtc'])
 
-  course = random.choice(scheduleInfo['course'])
-  scheduleInfo['courseCode'] = CONFIG['course'][course]['code']
-  scheduleInfo['courseName'] = CONFIG['course'][course]['name']
+  scheduleInfo['picked_course'] = random.choice(scheduleInfo['course'])
+  scheduleInfo['courseCode'] = CONFIG['course'][scheduleInfo['picked_course']]['code']
+  scheduleInfo['courseName'] = CONFIG['course'][scheduleInfo['picked_course']]['name']
 
   logArray = ["", "-" * 100]
   logArray.extend( " " * 26 + "[{:<10}] [{}] * {:<20} : {}".format(taskName, c_proc.name, k, v) for k, v in scheduleInfo.items())
@@ -169,7 +169,7 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
     LOGGER.info("* [{:<10}] [{}] [{}] {} is not in {}".format(
       taskName,
       c_proc.name,
-      course,
+      scheduleInfo['picked_course'],
       WEEKDAY[scheduleInfo['bookStartTimeUtc'].weekday()],
       scheduleInfo['weekday']
     ))
@@ -197,7 +197,7 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
       logStr = "* [{:<10}] [{}] [{}] {} <= {} <= {}".format(
           taskName,
           c_proc.name,
-          scheduleInfo['course'],
+          scheduleInfo['picked_course'],
           scheduleInfo['bookStartTimeEastern'].strftime("%Y-%m-%d %H:%M"),
           convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M"),
           scheduleInfo['bookEndTimeEastern'].strftime("%Y-%m-%d %H:%M")
