@@ -146,7 +146,7 @@ def convertTzUtcToUtc(inputDt):
 
 def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
 
-  redisConnection = redis.Redis(host='localhost', port=6379, decode_responses=True)
+  redisConnection = redis.Redis(host=CONFIG['redis']['host'], port=CONFIG['redis']['port'], decode_responses=True)
   c_proc = mp.current_process()
 
   bookDate = scheduleInfo.get('book_date',None) or (dt.datetime.now() + dt.timedelta(days=BOOK_INTERVAL)).strftime("%Y-%m-%d")
@@ -198,9 +198,9 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
           taskName,
           c_proc.name,
           scheduleInfo['picked_course'],
-          scheduleInfo['bookStartTimeEastern'].strftime("%Y-%m-%d %H:%M"),
-          convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M"),
-          scheduleInfo['bookEndTimeEastern'].strftime("%Y-%m-%d %H:%M")
+          scheduleInfo['bookStartTimeEastern'].strftime("%H:%M"),
+          convertTzUtcToEastern(teeTime).strftime("%H:%M"),
+          scheduleInfo['bookEndTimeEastern'].strftime("%H:%M")
       )
 
       if (scheduleInfo['bookStartTimeUtc'] <= teeTime <= scheduleInfo['bookEndTimeUtc']):
@@ -234,8 +234,11 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
     #}for
 
     if len(teeTimes) > 0:
-      time.sleep(0.5)
-      idx += 60
+      logStr = "* [{:<10}] [{}] [{}]".format(taskName, c_proc.name, scheduleInfo['picked_course'])
+      LOGGER.info(f"{logStr}")
+      LOGGER.info(f"{logStr} >>>>>>>>>> Couldn't find any teetime <<<<<<<<<<")
+      LOGGER.info(f"{logStr}")
+      break
     else:
       time.sleep(1)
   #}while

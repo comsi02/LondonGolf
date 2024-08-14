@@ -7,13 +7,13 @@ course:
     name: Thames Valley Golf Course Classic
   HKRY: 
     code: 9711
-    name: Thames Valley Golf Course Classic
+    name: Thames Valley Golf Club Hickory
   TRAD:
     code: 9714
-    name: Fanshawe Valley Golf Course Traditional
+    name: Fanshawe Golf Course Traditional
   QURY:
     code: 9713
-    name: Fanshawe Valley Golf Course The Quarry
+    name: Fanshawe Golf Course The Quarry
 
 #---------------------------------------------------------------------#
 # authenticate information
@@ -26,6 +26,14 @@ authentication:
   userinfo2:
     userid: xxxxx@gmail.com
     password: xxxxx
+
+#---------------------------------------------------------------------#
+# redis
+#   - redis connection information
+#---------------------------------------------------------------------#
+redis:
+  host: 127.0.0.1
+  port: 6379
     
 #---------------------------------------------------------------------#
 # setting of weekday:
@@ -49,6 +57,8 @@ schedule:
         buffer: 0
         course:
           - TRAD
+          - CLAS
+          - QURY
       - weekday: MON,TUE,WED,THU,FRI,SAT,SUN
         book_date:
         book_count: 1
@@ -57,3 +67,5 @@ schedule:
         buffer: 0        
         course:
           - QURY
+          - QURY
+          - TRAD
