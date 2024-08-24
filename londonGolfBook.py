@@ -51,9 +51,9 @@ def doLogin(driver, loginUrl, loginUid, loginPwd):
   driver.set_window_size(500,1000)
   driver.get(loginUrl)
   driver.implicitly_wait(TIMEOUT)
-  WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, "//input[@data-testid='login-email-component']"))).send_keys(loginUid)
-  WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, "//input[@data-testid='login-password-component']"))).send_keys(loginPwd)
-  WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='login-button']"))).click()
+  WebDriverWait(driver, TIMEOUT).until(EC.presence_of_element_located((By.XPATH, "//input[@data-testid='login-email-component']"))).send_keys(loginUid)
+  WebDriverWait(driver, TIMEOUT).until(EC.presence_of_element_located((By.XPATH, "//input[@data-testid='login-password-component']"))).send_keys(loginPwd)
+  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='login-button']"))).click()
 
 def getCartSessionRequest(driver):
   try:
@@ -118,7 +118,7 @@ def setLockTeeTime(loginSession, teeTimeInfo):
 def setReservation(driver):
   driver.refresh()
   driver.implicitly_wait(TIMEOUT)
-  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='mobile-core-shopping-cart']"))).click()
+  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='shopping-cart-mobile-button']"))).click()
   WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))).click()
   driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
   driver.find_element(By.NAME, 'chb-nm').click()
