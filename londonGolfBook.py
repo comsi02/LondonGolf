@@ -118,11 +118,11 @@ def setLockTeeTime(loginSession, teeTimeInfo):
 def setReservation(driver):
   driver.refresh()
   driver.implicitly_wait(TIMEOUT)
-  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='shopping-cart-mobile-button']"))).click()
-  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))).click()
+  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//*[@id=\"header\"]/div/div[2]"))).click()
+  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//*[@id=\"app-body\"]/div[2]/div[3]/div/div[4]/div[2]/button"))).click()
   driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
-  driver.find_element(By.NAME, 'chb-nm').click()
-  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))).click()
+  driver.find_element(By.XPATH, "//*[@id=\"app-container\"]/div/div[2]/div/div[2]/div/div[2]/div/div[2]/label/span/input").click()
+  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//*[@id=\"app-container\"]/div/div[2]/div/div[2]/div/div[2]/div/div[3]/div/div[1]/button"))).click()
 
 def convertTz(inputDt, tz1, tz2):
 
