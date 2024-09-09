@@ -118,11 +118,28 @@ def setLockTeeTime(loginSession, teeTimeInfo):
 def setReservation(driver):
   driver.refresh()
   driver.implicitly_wait(TIMEOUT)
-  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//*[@id=\"header\"]/div/div[2]"))).click()
-  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//*[@id=\"app-body\"]/div[2]/div[3]/div/div[4]/div[2]/button"))).click()
+
+  # click shopping cart
+  try:
+    WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='mobile-core-shopping-cart']"))).click()
+  except:
+    pass
+
+  try:
+    WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='shopping-cart-mobile-button']"))).click()
+  except:
+    pass
+
+  # click checkout
+  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))).click()
   driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
-  driver.find_element(By.XPATH, "//*[@id=\"app-container\"]/div/div[2]/div/div[2]/div/div[2]/div/div[2]/label/span/input").click()
-  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//*[@id=\"app-container\"]/div/div[2]/div/div[2]/div/div[2]/div/div[3]/div/div[1]/button"))).click()
+
+  # click checkbox
+  driver.find_element(By.NAME, 'chb-nm').click()
+
+  # click reservation button
+  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))).click()
+
 
 def convertTz(inputDt, tz1, tz2):
 
@@ -235,9 +252,14 @@ def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
 
     if len(teeTimes) > 0:
       logStr = "* [{:<10}] [{}] [{}]".format(taskName, c_proc.name, scheduleInfo['picked_course'])
-      LOGGER.info(f"{logStr}")
-      LOGGER.info(f"{logStr} >>>>>>>>>> Couldn't find any teetime <<<<<<<<<<")
-      LOGGER.info(f"{logStr}")
+      if flagTeeTime == False:
+        LOGGER.info(f"{logStr}")
+        LOGGER.info(f"{logStr} >>>>>>>>>> found teetime <<<<<<<<<<")
+        LOGGER.info(f"{logStr}")
+      else:
+        LOGGER.info(f"{logStr}")
+        LOGGER.info(f"{logStr} >>>>>>>>>> Couldn't find any teetime <<<<<<<<<<")
+        LOGGER.info(f"{logStr}")
       break
     else:
       time.sleep(1)
