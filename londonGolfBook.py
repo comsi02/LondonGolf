@@ -120,18 +120,11 @@ def setReservation(driver):
   driver.implicitly_wait(TIMEOUT)
 
   # click shopping cart
-  try:
-    WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='mobile-core-shopping-cart']"))).click()
-  except:
-    pass
-
-  try:
-    WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//div[@data-testid='shopping-cart-mobile-button']"))).click()
-  except:
-    pass
+  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-button']"))).click()
 
   # click checkout
   WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))).click()
+
   driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
 
   # click checkbox
