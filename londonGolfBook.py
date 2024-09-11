@@ -21,7 +21,7 @@ CONFIG = getConfig()
 
 TIMEOUT = 10
 BOOK_INTERVAL = 7
-MAX_WAIT_TEETIME = 600
+MAX_WAIT_TEETIME = 100
 WEEKDAY = ['MON','TUE','WED','THU','FRI','SAT','SUN']
 HEADERS = {'X-Be-Alias': 'city-of-london-golf-courses'}
 
