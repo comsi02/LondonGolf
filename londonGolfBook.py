@@ -1,5 +1,7 @@
 # -*- coding:utf-8 -*-
-import sys,time, traceback
+import sys
+import time
+import traceback
 import requests
 import datetime as dt
 import pytz
@@ -7,7 +9,10 @@ import argparse
 import multiprocessing as mp
 import redis
 import random
+import os
+import json
 from multiprocessing import Pool
+from typing import Dict, List, Optional, Any, Tuple
 
 from seleniumwire import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
@@ -16,336 +21,644 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 from common import *
 
+# Constants
+TIMEOUT = 10
+BOOK_INTERVAL = 8
+MAX_WAIT_TEETIME = 100
+WEEKDAY = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
+HEADERS = {'X-Be-Alias': 'city-of-london-golf-courses'}
+LOCAL_CACHE_FILE = "tee_time_cache.json"
+
+# API Endpoints
+ENDPOINTS = {
+    'login': "https://city-of-london-golf-courses.book.teeitup.golf/login",
+    'course': "https://phx-api-be-east-1b.kenna.io/course",
+    'cart': "https://phx-api-be-east-1b.kenna.io/shopping-cart/",
+    'cart_item': "https://phx-api-be-east-1b.kenna.io/shopping-cart/{}/cart-item",
+    'tee_time': "https://phx-api-be-east-1b.kenna.io/v2/tee-times?date={}&facilityIds={}",
+    'lock': "https://phx-api-be-east-1b.kenna.io/course/{}/tee-time/lock"
+}
+
+# Initialize logger and configuration
 LOGGER = getLogger()
 CONFIG = getConfig()
 
-TIMEOUT = 10
-BOOK_INTERVAL = 7
-MAX_WAIT_TEETIME = 100
-WEEKDAY = ['MON','TUE','WED','THU','FRI','SAT','SUN']
-HEADERS = {'X-Be-Alias': 'city-of-london-golf-courses'}
 
-LONDON_GOLF_GET_LOGIN = "https://city-of-london-golf-courses.book.teeitup.golf/login"
-LONDON_GOLF_GET_COURSE = "https://phx-api-be-east-1b.kenna.io/course"
-LONDON_GOLF_GET_CART = "https://phx-api-be-east-1b.kenna.io/shopping-cart/"
-LONDON_GOLF_SET_CART = "https://phx-api-be-east-1b.kenna.io/shopping-cart/{}/cart-item"
-LONDON_GOLF_GET_TEE_TIME = "https://phx-api-be-east-1b.kenna.io/v2/tee-times?date={}&facilityIds={}"
-LONDON_GOLF_SET_LOCK = "https://phx-api-be-east-1b.kenna.io/course/{}/tee-time/lock"
-
-def getDriver(isHeadless = False):
-  '''
-  options.add_argument('--allow-insecure-localhost')
-  options.add_argument('--no-sandbox')
-  options.add_argument('--disable-gpu')
-  options.add_argument('--headless')
-  options.add_argument('--disable-dev-shm-usage')
-  options.add_argument('--allow-running-insecure-content')
-  options.add_argument('--ignore-certificate-errors')
-  '''
-  options = webdriver.ChromeOptions()
-  if isHeadless:
-    options.add_argument('--headless')
-  return webdriver.Chrome(options=options, seleniumwire_options={})
-
-def doLogin(driver, loginUrl, loginUid, loginPwd):
-  driver.set_window_size(500,1000)
-  driver.get(loginUrl)
-  driver.implicitly_wait(TIMEOUT)
-  WebDriverWait(driver, TIMEOUT).until(EC.presence_of_element_located((By.XPATH, "//input[@data-testid='login-email-component']"))).send_keys(loginUid)
-  WebDriverWait(driver, TIMEOUT).until(EC.presence_of_element_located((By.XPATH, "//input[@data-testid='login-password-component']"))).send_keys(loginPwd)
-  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='login-button']"))).click()
-
-def getCartSessionRequest(driver):
-  try:
-    driver.wait_for_request(LONDON_GOLF_GET_COURSE,TIMEOUT)
-    driver.refresh()
-    return driver.wait_for_request(LONDON_GOLF_GET_CART,TIMEOUT)
-  except TimeoutException as ex:
-    LOGGER.info(f"* Exception has been thrown. {str(ex)}")
-
-def getCartSession(driver):
-  return getCartSessionRequest(driver).path.split('/')[-1]
-
-def getLoginSession(driver):
-  for request in driver.requests:
-    if request.response and request.response.status_code == 200 and request.headers['Session'] != None:
-      return request.headers['Session']
-
-def getTeeTimes(course, date):
-  try:
-    res = requests.get(LONDON_GOLF_GET_TEE_TIME.format(date, course), headers=HEADERS)
-    result = [ x for x in res.json()[0]['teetimes'] if x['bookedPlayers'] == 0 and x['maxPlayers'] == 4 ]
-  except Exception as e:
-    LOGGER.info("========== Error ==========")
-    LOGGER.info(res.json())
-    LOGGER.info("========== Error ==========")
-  return result
-
-def setShoppingCart(cartSession, teeTimeInfo):
-  data = {
-    'item': {
-      'facilityId': teeTimeInfo['rates'][0]['golfnow']['GolfFacilityId'],
-      'type': "TeeTime",
-      'extra': {
-        'teetime': teeTimeInfo['teetime'],
-        'players': teeTimeInfo['maxPlayers'],
-        'price': int(teeTimeInfo['rates'][0]['greenFeeWalking'] / 100),
-        'rate': {
-          'holes': teeTimeInfo['rates'][0]['holes'],
-          'rateId': teeTimeInfo['rates'][0]['_id'],
-          'rateSetId': teeTimeInfo['rates'][0]['golfnow']['GolfCourseId'],
-          'name': teeTimeInfo['rates'][0]['name'],
-          'transportation': 'Walking',
-        },
-        'featuredProducts': []
-      }
-    }
-  }
-
-  return requests.post(LONDON_GOLF_SET_CART.format(cartSession), headers=HEADERS, json=data)
-
-def setLockTeeTime(loginSession, teeTimeInfo):
-  data = {
-    "teetime": teeTimeInfo['teetime'],
-    "slots": 4,
-    "expiresIn": 5
-  }
-
-  headers = HEADERS;
-  headers['Session'] = loginSession
-  return requests.put(LONDON_GOLF_SET_LOCK.format(teeTimeInfo['courseId']), headers=headers, json=data)
-
-def setReservation(driver):
-  driver.refresh()
-  driver.implicitly_wait(TIMEOUT)
-
-  # click shopping cart
-  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-button']"))).click()
-
-  # click checkout
-  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))).click()
-
-  driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
-
-  # click checkbox
-  driver.find_element(By.NAME, 'chb-nm').click()
-
-  # click reservation button
-  WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))).click()
+class GolfBookingError(Exception):
+    """Base exception class for golf booking errors"""
+    pass
 
 
-def convertTz(inputDt, tz1, tz2):
+class AuthenticationError(GolfBookingError):
+    """Exception for authentication related errors"""
+    pass
 
-  if type(inputDt) == dt.datetime:
-    inputDt = inputDt.strftime("%Y-%m-%d %H:%M:%S")
 
-  tz1 = pytz.timezone(tz1)
-  tz2 = pytz.timezone(tz2)
-  inputDt = dt.datetime.strptime(inputDt,"%Y-%m-%d %H:%M:%S")
-  inputDt = tz1.localize(inputDt)
-  return inputDt.astimezone(tz2)
+class TeeTimeError(GolfBookingError):
+    """Exception for tee time related errors"""
+    pass
 
-def convertTzEasternToUtc(inputDt):
-  return convertTz(inputDt, 'US/Eastern', 'UTC')
 
-def convertTzUtcToEastern(inputDt):
-  return convertTz(inputDt, 'UTC', 'US/Eastern')
+class CartError(GolfBookingError):
+    """Exception for shopping cart related errors"""
+    pass
 
-def convertTzUtcToUtc(inputDt):
-  return convertTz(inputDt, 'UTC', 'UTC')
 
-def getBookSchedule(scheduleInfo, taskName, cartSession, loginSession):
+class ReservationError(GolfBookingError):
+    """Exception for reservation related errors"""
+    pass
 
-  redisConnection = redis.Redis(host=CONFIG['redis']['host'], port=CONFIG['redis']['port'], decode_responses=True)
-  c_proc = mp.current_process()
 
-  bookDate = scheduleInfo.get('book_date',None) or (dt.datetime.now() + dt.timedelta(days=BOOK_INTERVAL)).strftime("%Y-%m-%d")
-  scheduleInfo['bufferTime'] = random.randrange(0, scheduleInfo.get('buffer',0) + 1)
-  scheduleInfo['bookStartTimeUtc'] = convertTzEasternToUtc(f"{bookDate} {scheduleInfo['start_time']}:00") + dt.timedelta(minutes=scheduleInfo['bufferTime'])
-  scheduleInfo['bookEndTimeUtc']   = scheduleInfo['bookStartTimeUtc'] + dt.timedelta(minutes=scheduleInfo.get('duration',30))
-  scheduleInfo['bookStartTimeEastern'] = convertTzUtcToEastern(scheduleInfo['bookStartTimeUtc'])
-  scheduleInfo['bookEndTimeEastern']   = convertTzUtcToEastern(scheduleInfo['bookEndTimeUtc'])
-
-  scheduleInfo['picked_course'] = random.choice(scheduleInfo['course'])
-  scheduleInfo['courseCode'] = CONFIG['course'][scheduleInfo['picked_course']]['code']
-  scheduleInfo['courseName'] = CONFIG['course'][scheduleInfo['picked_course']]['name']
-
-  logArray = ["", "-" * 100]
-  logArray.extend( " " * 26 + "[{:<10}] [{}] * {:<20} : {}".format(taskName, c_proc.name, k, v) for k, v in scheduleInfo.items())
-  logArray.append("-" * 100)
-  LOGGER.info("\n".join(logArray))
-
-  if WEEKDAY[scheduleInfo['bookStartTimeUtc'].weekday()] not in scheduleInfo['weekday']:
-    LOGGER.info("* [{:<10}] [{}] [{}] {} is not in {}".format(
-      taskName,
-      c_proc.name,
-      scheduleInfo['picked_course'],
-      WEEKDAY[scheduleInfo['bookStartTimeUtc'].weekday()],
-      scheduleInfo['weekday']
-    ))
-    return []
-
-  #---------------------------------------------------------------#
-  # 4-1. wait and get tee time
-  #---------------------------------------------------------------#
-  flagTeeTime = True
-  idx = 0
-
-  while flagTeeTime and idx < MAX_WAIT_TEETIME:#{
-    idx += 1
-
-    teeTimes = getTeeTimes(scheduleInfo['courseCode'], bookDate)
-    LOGGER.info("* [{:<10}] [{}] {} time(s) attempted".format(taskName,c_proc.name,idx))
-
-    #---------------------------------------------------------------#
-    # 4-2. select tee time
-    #---------------------------------------------------------------#
-    selectedTeeTimes = []
-    for teeTimeInfo in teeTimes: #{
-      teeTime = convertTzUtcToUtc(dt.datetime.strptime(teeTimeInfo['teetime'],"%Y-%m-%dT%H:%M:%S.000Z").strftime("%Y-%m-%d %H:%M:%S"))
-
-      logStr = "* [{:<10}] [{}] [{}] {} <= {} <= {}".format(
-          taskName,
-          c_proc.name,
-          scheduleInfo['picked_course'],
-          scheduleInfo['bookStartTimeEastern'].strftime("%H:%M"),
-          convertTzUtcToEastern(teeTime).strftime("%H:%M"),
-          scheduleInfo['bookEndTimeEastern'].strftime("%H:%M")
-      )
-
-      if (scheduleInfo['bookStartTimeUtc'] <= teeTime <= scheduleInfo['bookEndTimeUtc']):
-
-        redisVaildationKey = f"""{teeTimeInfo['rates'][0]['_id']}:{convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M:%S")}"""
-        redisRes = redisConnection.get(redisVaildationKey)
-
-        if (len(selectedTeeTimes) < scheduleInfo['book_count'] and redisRes is None):
-          scheduleInfo['teeTimeEastern'] = convertTzUtcToEastern(teeTime).strftime("%Y-%m-%d %H:%M")
-          teeTimeInfo['scheduleInfo'] = scheduleInfo
-
-          selectedTeeTimes.append(teeTimeInfo)
-          redisConnection.set(redisVaildationKey,"OK")
-          redisConnection.expire(redisVaildationKey,300)
-
-          #---------------------------------------------------------------#
-          # 4-3. set lock and cart
-          #---------------------------------------------------------------#
-          lockRes = setLockTeeTime(loginSession, teeTimeInfo)
-          cartRes = setShoppingCart(cartSession, teeTimeInfo)
-          flagTeeTime = False
-          LOGGER.info(
-              f"{logStr} [Valid] [Selected] [lock:{lockRes.status_code} & cart:{cartRes.status_code}]"
-          )
-        elif redisRes is None:
-          LOGGER.info(f"{logStr} [Valid]")
+class CacheManager:
+    """Manages caching of tee time data using either Redis or local file"""
+    
+    def __init__(self):
+        """Initialize the cache manager"""
+        self.use_redis = False
+        self.redis_connection = None
+        self.cache_file = LOCAL_CACHE_FILE
+        self.cache_data = {}
+        
+        # Try to connect to Redis if configuration exists
+        if 'redis' in CONFIG and 'host' in CONFIG['redis'] and 'port' in CONFIG['redis']:
+            try:
+                self.redis_connection = redis.Redis(
+                    host=CONFIG['redis']['host'],
+                    port=CONFIG['redis']['port'],
+                    decode_responses=True
+                )
+                # Test connection
+                self.redis_connection.ping()
+                self.use_redis = True
+                LOGGER.info("Using Redis for caching")
+            except Exception as e:
+                LOGGER.info(f"Redis connection failed: {str(e)}. Using local file cache instead.")
+                self.use_redis = False
+        
+        # Load local cache if exists
+        if not self.use_redis and os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, 'r') as f:
+                    self.cache_data = json.load(f)
+                LOGGER.info(f"Loaded local cache from {self.cache_file}")
+            except Exception as e:
+                LOGGER.info(f"Failed to load local cache: {str(e)}. Starting with empty cache.")
+                self.cache_data = {}
+    
+    def get(self, key: str) -> Optional[str]:
+        """
+        Get value from cache
+        
+        Args:
+            key: Cache key
+            
+        Returns:
+            Cached value or None if not found
+        """
+        if self.use_redis:
+            return self.redis_connection.get(key)
         else:
-          LOGGER.info(f"{logStr} [Valid] [Redis]")
-      else:
-        LOGGER.info(logStr)
-    #}for
+            return self.cache_data.get(key)
+    
+    def set(self, key: str, value: str, expire_seconds: int = 300) -> None:
+        """
+        Set value in cache
+        
+        Args:
+            key: Cache key
+            value: Value to cache
+            expire_seconds: Expiration time in seconds
+        """
+        if self.use_redis:
+            self.redis_connection.set(key, value)
+            self.redis_connection.expire(key, expire_seconds)
+        else:
+            self.cache_data[key] = value
+            # Save to file
+            try:
+                with open(self.cache_file, 'w') as f:
+                    json.dump(self.cache_data, f)
+            except Exception as e:
+                LOGGER.info(f"Failed to save local cache: {str(e)}")
+    
+    def delete(self, key: str) -> None:
+        """
+        Delete value from cache
+        
+        Args:
+            key: Cache key
+        """
+        if self.use_redis:
+            self.redis_connection.delete(key)
+        else:
+            if key in self.cache_data:
+                del self.cache_data[key]
+                # Save to file
+                try:
+                    with open(self.cache_file, 'w') as f:
+                        json.dump(self.cache_data, f)
+                except Exception as e:
+                    LOGGER.info(f"Failed to save local cache: {str(e)}")
 
-    if len(teeTimes) > 0:
-      logStr = "* [{:<10}] [{}] [{}]".format(taskName, c_proc.name, scheduleInfo['picked_course'])
-      if flagTeeTime == False:
-        LOGGER.info(f"{logStr}")
-        LOGGER.info(f"{logStr} >>>>>>>>>> found teetime <<<<<<<<<<")
-        LOGGER.info(f"{logStr}")
-      else:
-        LOGGER.info(f"{logStr}")
-        LOGGER.info(f"{logStr} >>>>>>>>>> Couldn't find any teetime <<<<<<<<<<")
-        LOGGER.info(f"{logStr}")
-      break
-    else:
-      time.sleep(1)
-  #}while
 
-  return selectedTeeTimes
+# Initialize cache manager
+CACHE_MANAGER = CacheManager()
+
+
+def get_driver(is_headless: bool = False) -> webdriver.Chrome:
+    """
+    Configure and return a Chrome driver.
+    
+    Args:
+        is_headless: Whether to run in headless mode
+        
+    Returns:
+        Configured Chrome driver
+    """
+    options = webdriver.ChromeOptions()
+    if is_headless:
+        options.add_argument('--headless')
+    return webdriver.Chrome(options=options, seleniumwire_options={})
+
+
+def do_login(driver: webdriver.Chrome, login_url: str, login_uid: str, login_pwd: str) -> None:
+    """
+    Perform login operation.
+    
+    Args:
+        driver: Web driver
+        login_url: Login URL
+        login_uid: Login ID
+        login_pwd: Login password
+    """
+    try:
+        driver.set_window_size(500, 1000)
+        driver.get(login_url)
+        driver.implicitly_wait(TIMEOUT)
+        
+        # Enter email
+        WebDriverWait(driver, TIMEOUT).until(
+            EC.presence_of_element_located((By.XPATH, "//input[@data-testid='login-email-component']"))
+        ).send_keys(login_uid)
+        
+        # Enter password
+        WebDriverWait(driver, TIMEOUT).until(
+            EC.presence_of_element_located((By.XPATH, "//input[@data-testid='login-password-component']"))
+        ).send_keys(login_pwd)
+        
+        # Click login button
+        WebDriverWait(driver, TIMEOUT).until(
+            EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='login-button']"))
+        ).click()
+    except Exception as e:
+        raise AuthenticationError(f"Login failed: {str(e)}")
+
+
+def get_cart_session_request(driver: webdriver.Chrome) -> Any:
+    """
+    Get cart session request.
+    
+    Args:
+        driver: Web driver
+        
+    Returns:
+        Cart session request object
+    """
+    try:
+        driver.wait_for_request(ENDPOINTS['course'], TIMEOUT)
+        driver.refresh()
+        return driver.wait_for_request(ENDPOINTS['cart'], TIMEOUT)
+    except TimeoutException as ex:
+        LOGGER.info(f"* Exception occurred: {str(ex)}")
+        raise CartError(f"Failed to get cart session request: {str(ex)}")
+
+
+def get_cart_session(driver: webdriver.Chrome) -> str:
+    """
+    Get cart session ID.
+    
+    Args:
+        driver: Web driver
+        
+    Returns:
+        Cart session ID
+    """
+    return get_cart_session_request(driver).path.split('/')[-1]
+
+
+def get_login_session(driver: webdriver.Chrome) -> str:
+    """
+    Get login session ID.
+    
+    Args:
+        driver: Web driver
+        
+    Returns:
+        Login session ID
+    """
+    for request in driver.requests:
+        if (request.response and 
+            request.response.status_code == 200 and 
+            request.headers.get('Session')):
+            return request.headers['Session']
+    raise AuthenticationError("Could not get login session")
+
+
+def get_tee_times(course: str, date: str) -> List[Dict]:
+    """
+    Get tee times for a specific course and date.
+    
+    Args:
+        course: Course code
+        date: Date in YYYY-MM-DD format
+        
+    Returns:
+        List of available tee times
+    """
+    try:
+        response = requests.get(
+            ENDPOINTS['tee_time'].format(date, course), 
+            headers=HEADERS
+        )
+        response.raise_for_status()
+        
+        tee_times = response.json()[0]['teetimes']
+        return [t for t in tee_times if t['bookedPlayers'] == 0 and t['maxPlayers'] == 4]
+    except Exception as e:
+        LOGGER.info("========== Error ==========")
+        LOGGER.info(response.json() if 'response' in locals() else "No response")
+        LOGGER.info("========== Error ==========")
+        raise TeeTimeError(f"Failed to get tee times: {str(e)}")
+
+
+def set_shopping_cart(cart_session: str, tee_time_info: Dict) -> requests.Response:
+    """
+    Add tee time to shopping cart.
+    
+    Args:
+        cart_session: Cart session ID
+        tee_time_info: Tee time information
+        
+    Returns:
+        API response
+    """
+    data = {
+        'item': {
+            'facilityId': tee_time_info['rates'][0]['golfnow']['GolfFacilityId'],
+            'type': "TeeTime",
+            'extra': {
+                'teetime': tee_time_info['teetime'],
+                'players': tee_time_info['maxPlayers'],
+                'price': int(tee_time_info['rates'][0]['greenFeeWalking'] / 100),
+                'rate': {
+                    'holes': tee_time_info['rates'][0]['holes'],
+                    'rateId': tee_time_info['rates'][0]['_id'],
+                    'rateSetId': tee_time_info['rates'][0]['golfnow']['GolfCourseId'],
+                    'name': tee_time_info['rates'][0]['name'],
+                    'transportation': 'Walking',
+                },
+                'featuredProducts': []
+            }
+        }
+    }
+
+    return requests.post(
+        ENDPOINTS['cart_item'].format(cart_session), 
+        headers=HEADERS, 
+        json=data
+    )
+
+
+def set_lock_tee_time(login_session: str, tee_time_info: Dict) -> requests.Response:
+    """
+    Lock a tee time.
+    
+    Args:
+        login_session: Login session ID
+        tee_time_info: Tee time information
+        
+    Returns:
+        API response
+    """
+    data = {
+        "teetime": tee_time_info['teetime'],
+        "slots": 4,
+        "expiresIn": 5
+    }
+
+    headers = HEADERS.copy()
+    headers['Session'] = login_session
+    return requests.put(
+        ENDPOINTS['lock'].format(tee_time_info['courseId']), 
+        headers=headers, 
+        json=data
+    )
+
+
+def set_reservation(driver: webdriver.Chrome) -> None:
+    """
+    Complete the reservation process.
+    
+    Args:
+        driver: Web driver
+    """
+    try:
+        driver.refresh()
+        driver.implicitly_wait(TIMEOUT)
+
+        # Click shopping cart button
+        WebDriverWait(driver, TIMEOUT).until(
+            EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-button']"))
+        ).click()
+
+        # Click checkout button
+        WebDriverWait(driver, TIMEOUT).until(
+            EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))
+        ).click()
+
+        # Scroll to bottom of page
+        driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
+
+        # Click checkbox
+        driver.find_element(By.NAME, 'chb-nm').click()
+
+        # Click reservation button
+        WebDriverWait(driver, TIMEOUT).until(
+            EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))
+        ).click()
+    except Exception as e:
+        raise ReservationError(f"Failed to complete reservation: {str(e)}")
+
+
+def convert_tz(input_dt: Any, tz1: str, tz2: str) -> dt.datetime:
+    """
+    Convert timezone.
+    
+    Args:
+        input_dt: Input date/time
+        tz1: Source timezone
+        tz2: Target timezone
+        
+    Returns:
+        Converted date/time
+    """
+    if isinstance(input_dt, dt.datetime):
+        input_dt = input_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    tz1_obj = pytz.timezone(tz1)
+    tz2_obj = pytz.timezone(tz2)
+    input_dt = dt.datetime.strptime(input_dt, "%Y-%m-%d %H:%M:%S")
+    input_dt = tz1_obj.localize(input_dt)
+    return input_dt.astimezone(tz2_obj)
+
+
+def convert_tz_eastern_to_utc(input_dt: Any) -> dt.datetime:
+    """Convert US Eastern time to UTC."""
+    return convert_tz(input_dt, 'US/Eastern', 'UTC')
+
+
+def convert_tz_utc_to_eastern(input_dt: Any) -> dt.datetime:
+    """Convert UTC to US Eastern time."""
+    return convert_tz(input_dt, 'UTC', 'US/Eastern')
+
+
+def convert_tz_utc_to_utc(input_dt: Any) -> dt.datetime:
+    """Convert UTC to UTC (format standardization only)."""
+    return convert_tz(input_dt, 'UTC', 'UTC')
+
+
+def get_book_schedule(schedule_info: Dict, task_name: str, cart_session: str, login_session: str) -> List[Dict]:
+    """
+    Process booking schedule.
+    
+    Args:
+        schedule_info: Schedule information
+        task_name: Task name
+        cart_session: Cart session ID
+        login_session: Login session ID
+        
+    Returns:
+        List of selected tee times
+    """
+    c_proc = mp.current_process()
+
+    # Set booking date
+    book_date = schedule_info.get('book_date', None) or (
+        dt.datetime.now() + dt.timedelta(days=BOOK_INTERVAL)
+    ).strftime("%Y-%m-%d")
+    
+    # Set buffer time
+    schedule_info['bufferTime'] = random.randrange(0, schedule_info.get('buffer', 0) + 1)
+    
+    # Set UTC times
+    schedule_info['bookStartTimeUtc'] = convert_tz_eastern_to_utc(
+        f"{book_date} {schedule_info['start_time']}:00"
+    ) + dt.timedelta(minutes=schedule_info['bufferTime'])
+    
+    schedule_info['bookEndTimeUtc'] = schedule_info['bookStartTimeUtc'] + dt.timedelta(
+        minutes=schedule_info.get('duration', 30)
+    )
+    
+    # Set Eastern times
+    schedule_info['bookStartTimeEastern'] = convert_tz_utc_to_eastern(schedule_info['bookStartTimeUtc'])
+    schedule_info['bookEndTimeEastern'] = convert_tz_utc_to_eastern(schedule_info['bookEndTimeUtc'])
+
+    # Select course
+    schedule_info['picked_course'] = random.choice(schedule_info['course'])
+    schedule_info['courseCode'] = CONFIG['course'][schedule_info['picked_course']]['code']
+    schedule_info['courseName'] = CONFIG['course'][schedule_info['picked_course']]['name']
+
+    # Log output
+    log_array = ["", "-" * 100]
+    log_array.extend(
+        " " * 26 + "[{:<10}] [{}] * {:<20} : {}".format(
+            task_name, c_proc.name, k, v
+        ) for k, v in schedule_info.items()
+    )
+    log_array.append("-" * 100)
+    LOGGER.info("\n".join(log_array))
+
+    # Check weekday
+    if WEEKDAY[schedule_info['bookStartTimeUtc'].weekday()] not in schedule_info['weekday']:
+        LOGGER.info("* [{:<10}] [{}] [{}] {} is not in {}".format(
+            task_name,
+            c_proc.name,
+            schedule_info['picked_course'],
+            WEEKDAY[schedule_info['bookStartTimeUtc'].weekday()],
+            schedule_info['weekday']
+        ))
+        return []
+
+    # Search and select tee times
+    flag_tee_time = True
+    idx = 0
+    selected_tee_times = []
+
+    while flag_tee_time and idx < MAX_WAIT_TEETIME:
+        idx += 1
+
+        tee_times = get_tee_times(schedule_info['courseCode'], book_date)
+        LOGGER.info("* [{:<10}] [{}] {} time(s) attempted".format(
+            task_name, c_proc.name, idx
+        ))
+
+        for tee_time_info in tee_times:
+            tee_time = convert_tz_utc_to_utc(
+                dt.datetime.strptime(
+                    tee_time_info['teetime'],
+                    "%Y-%m-%dT%H:%M:%S.000Z"
+                ).strftime("%Y-%m-%d %H:%M:%S")
+            )
+
+            log_str = "* [{:<10}] [{}] [{}] {} <= {} <= {}".format(
+                task_name,
+                c_proc.name,
+                schedule_info['picked_course'],
+                schedule_info['bookStartTimeEastern'].strftime("%H:%M"),
+                convert_tz_utc_to_eastern(tee_time).strftime("%H:%M"),
+                schedule_info['bookEndTimeEastern'].strftime("%H:%M")
+            )
+
+            if schedule_info['bookStartTimeUtc'] <= tee_time <= schedule_info['bookEndTimeUtc']:
+                redis_validation_key = f"{tee_time_info['rates'][0]['_id']}:{convert_tz_utc_to_eastern(tee_time).strftime('%Y-%m-%d %H:%M:%S')}"
+                redis_res = CACHE_MANAGER.get(redis_validation_key)
+
+                if len(selected_tee_times) < schedule_info.get('book_count', 1) and redis_res is None:
+                    schedule_info['teeTimeEastern'] = convert_tz_utc_to_eastern(tee_time).strftime("%Y-%m-%d %H:%M")
+                    tee_time_info['scheduleInfo'] = schedule_info
+
+                    selected_tee_times.append(tee_time_info)
+                    CACHE_MANAGER.set(redis_validation_key, "OK", 300)
+
+                    # Lock tee time and add to cart
+                    lock_res = set_lock_tee_time(login_session, tee_time_info)
+                    cart_res = set_shopping_cart(cart_session, tee_time_info)
+                    flag_tee_time = False
+                    LOGGER.info(
+                        f"{log_str} [Valid] [Selected] [lock:{lock_res.status_code} & cart:{cart_res.status_code}]"
+                    )
+                elif redis_res is None:
+                    LOGGER.info(f"{log_str} [Valid]")
+                else:
+                    LOGGER.info(f"{log_str} [Valid] [Cache]")
+            else:
+                LOGGER.info(log_str)
+
+        if len(tee_times) > 0:
+            log_str = "* [{:<10}] [{}] [{}]".format(
+                task_name, c_proc.name, schedule_info['picked_course']
+            )
+            if not flag_tee_time:
+                LOGGER.info(f"{log_str}")
+                LOGGER.info(f"{log_str} >>>>>>>>>> found teetime <<<<<<<<<<")
+                LOGGER.info(f"{log_str}")
+            else:
+                LOGGER.info(f"{log_str}")
+                LOGGER.info(f"{log_str} >>>>>>>>>> Couldn't find any teetime <<<<<<<<<<")
+                LOGGER.info(f"{log_str}")
+            break
+        else:
+            time.sleep(1)
+
+    return selected_tee_times
+
 
 def main():
+    """Main function"""
+    try:
+        LOGGER.info("")
+        LOGGER.info("#---------------------------------------------------#")
+        LOGGER.info("#                     START                         #")
+        LOGGER.info("#---------------------------------------------------#")
+        LOGGER.info("")
 
-  try:
+        # Parse command line arguments
+        parser = argparse.ArgumentParser(
+            prog='London Golf Booking', 
+            description='London Golf Booking Batch', 
+            epilog='Copyright.2025.Andrew Song.All rights reserved.'
+        )
+        parser.add_argument(
+            '-d', '--debug', 
+            required=True, 
+            choices=['yes', 'no'], 
+            help='use debug mode'
+        )
+        parser.add_argument(
+            '-t', '--task',  
+            required=True, 
+            help='use task name'
+        )
 
-    LOGGER.info("")
-    LOGGER.info("#---------------------------------------------------#")
-    LOGGER.info("#                     START                         #")
-    LOGGER.info("#---------------------------------------------------#")
-    LOGGER.info("")
+        args = parser.parse_args()
 
-    #---------------------------------------------------------------#
-    # 0. set parameters
-    #---------------------------------------------------------------#
-    parser = argparse.ArgumentParser(prog='London Golf Booking', description='London Golf Booking Batch', epilog='Copyright.2023.Andrew Song.All rights reserved.')
-    parser.add_argument('-d', '--debug', required=True, choices=['yes','no'], help='use debug mode')
-    parser.add_argument('-t', '--task',  required=True, help='use task name')
+        task_name = args.task
+        debug_mode = args.debug == 'yes'
+        
+        # Get authentication information
+        auth_key = CONFIG['schedule'][task_name]['auth']
+        login_uid = CONFIG['authentication'][auth_key]['userid']
+        login_pwd = CONFIG['authentication'][auth_key]['password']
 
-    args = parser.parse_args()
+        # Initialize driver and login
+        driver = get_driver(not debug_mode)
+        do_login(driver, ENDPOINTS['login'], login_uid, login_pwd)
+        LOGGER.info("* [{:<10}] (Done.) login : {}".format(task_name, login_uid))
 
-    taskName = args.task
-    debugMode = True if args.debug == 'yes' else False
-    loginUid = CONFIG['authentication'][CONFIG['schedule'][taskName]['auth']]['userid']
-    loginPwd = CONFIG['authentication'][CONFIG['schedule'][taskName]['auth']]['password']
+        # Get cart session
+        cart_session = get_cart_session(driver)
+        LOGGER.info("* [{:<10}] (Done.) get cart session : {}".format(task_name, cart_session))
 
-    #---------------------------------------------------------------#
-    # 1. getDriver and login
-    #---------------------------------------------------------------#
-    driver = getDriver(not debugMode)
-    doLogin(driver, LONDON_GOLF_GET_LOGIN, loginUid, loginPwd)
-    LOGGER.info("* [{:<10}] (Done.) login : {}".format(taskName,loginUid))
+        # Get login session
+        login_session = get_login_session(driver)
+        LOGGER.info("* [{:<10}] (Done.) get login session : {}...{}".format(
+            task_name, login_session[:20], login_session[-20:]
+        ))
 
-    #---------------------------------------------------------------#
-    # 2. get cart session
-    #---------------------------------------------------------------#
-    cartSession = getCartSession(driver)
-    LOGGER.info("* [{:<10}] (Done.) get cart session : {}".format(taskName,cartSession))
+        # Process booking schedules
+        p = Pool(mp.cpu_count())
 
-    #---------------------------------------------------------------#
-    # 3. get login session
-    #---------------------------------------------------------------#
-    loginSession = getLoginSession(driver)
-    LOGGER.info("* [{:<10}] (Done.) get login session : {}...{}".format(taskName,loginSession[:20],loginSession[-20:]))
+        flag_reservation = False
+        multi_process_result = []
 
-    #---------------------------------------------------------------#
-    # 4. select book schedules
-    #---------------------------------------------------------------#
-    p = Pool(mp.cpu_count())
+        for schedule_info in CONFIG['schedule'][task_name]['tasks']:
+            multi_process_result.append(
+                p.apply_async(
+                    get_book_schedule,
+                    (schedule_info, task_name, cart_session, login_session)
+                )
+            )
 
-    flagReservation = False
-    multiProcessResult = []
+        p.close()
+        p.join()
 
-    for scheduleInfo in CONFIG['schedule'][taskName]['tasks']:
-      multiProcessResult.append(p.apply_async(getBookSchedule,(scheduleInfo,taskName,cartSession,loginSession)))
+        for m in multi_process_result:
+            for r in m.get():
+                flag_reservation = True
+                break
 
-    p.close()
-    p.join()
+        if flag_reservation:
+            # Complete reservation
+            LOGGER.info("* [{:<10}] (Start) set reservation.".format(task_name))
+            set_reservation(driver)
+            LOGGER.info("* [{:<10}] (Done.) set reservation.".format(task_name))
+            time.sleep(10)
 
-    for m in multiProcessResult:
-      for r in m.get():
-        flagReservation = True
-        break
+        LOGGER.info("")
+        LOGGER.info("#---------------------------------------------------#")
+        LOGGER.info("#                      END                          #")
+        LOGGER.info("#---------------------------------------------------#")
+        LOGGER.info("")
 
-    if flagReservation:#{
-      #---------------------------------------------------------------#
-      # 6. set reservation
-      #---------------------------------------------------------------#
-      LOGGER.info("* [{:<10}] (Start) set reservation.".format(taskName))
-      setReservation(driver)
-      LOGGER.info("* [{:<10}] (Done.) set reservation.".format(taskName))
-      time.sleep(10)
-    #}if
+    except Exception as e:
+        traceback_msg = "Traceback: %s" % traceback.format_exc()
+        LOGGER.info("[ERROR]" + "-" * 100)
+        LOGGER.info(traceback_msg)
+        LOGGER.info("[ERROR]" + "-" * 100)
+        print("[ERROR]" + "-" * 100, file=sys.stderr)
+        print(traceback_msg, file=sys.stderr)
+        print("[ERROR]" + "-" * 100, file=sys.stderr)
 
-    LOGGER.info("")
-    LOGGER.info("#---------------------------------------------------#")
-    LOGGER.info("#                      END                          #")
-    LOGGER.info("#---------------------------------------------------#")
-    LOGGER.info("")
-
-  except Exception as e:
-    traceback_msg = "Traceback: %s" % traceback.format_exc()
-    LOGGER.info("[ERROR]"+"-"*100)
-    LOGGER.info(traceback_msg)
-    LOGGER.info("[ERROR]"+"-"*100)
-    print("[ERROR]"+"-"*100, file=sys.stderr)
-    print(traceback_msg, file=sys.stderr)
-    print("[ERROR]"+"-"*100, file=sys.stderr)
 
 if __name__ == '__main__':
-  main()
+    main()
