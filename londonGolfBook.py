@@ -31,7 +31,7 @@ LOCAL_CACHE_FILE = "tee_time_cache.json"
 
 # API Endpoints
 ENDPOINTS = {
-    'login': "https://city-of-london-golf-courses.book.teeitup.golf/login",
+    'login': "https://city-of-london-golf-courses.book.teeitup.com/login",
     'course': "https://phx-api-be-east-1b.kenna.io/course",
     'cart': "https://phx-api-be-east-1b.kenna.io/shopping-cart/",
     'cart_item': "https://phx-api-be-east-1b.kenna.io/shopping-cart/{}/cart-item",
@@ -355,7 +355,7 @@ def set_lock_tee_time(login_session: str, tee_time_info: Dict) -> requests.Respo
     )
 
 
-def set_reservation(driver: webdriver.Chrome) -> None:
+def set_reservation(driver: webdriver.Chrome, task_name: str) -> None:
     """
     Complete the reservation process.
     
@@ -365,22 +365,33 @@ def set_reservation(driver: webdriver.Chrome) -> None:
     try:
         driver.refresh()
         driver.implicitly_wait(TIMEOUT)
+        time.sleep(5)
+
+        LOGGER.info("* [{:<10}] + reservation.: click shopping cart button".format(task_name))
 
         # Click shopping cart button
         WebDriverWait(driver, TIMEOUT).until(
             EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-button']"))
         ).click()
 
+        LOGGER.info("* [{:<10}] + reservation.: click checkout button".format(task_name))
+
         # Click checkout button
         WebDriverWait(driver, TIMEOUT).until(
             EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))
         ).click()
 
+        LOGGER.info("* [{:<10}] + reservation.: window scroll to down".format(task_name))
+
         # Scroll to bottom of page
         driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
 
+        LOGGER.info("* [{:<10}] + reservation.: click checkbox".format(task_name))
+
         # Click checkbox
         driver.find_element(By.NAME, 'chb-nm').click()
+
+        LOGGER.info("* [{:<10}] + reservation.: click the reservation button".format(task_name))
 
         # Click reservation button
         WebDriverWait(driver, TIMEOUT).until(
@@ -640,7 +651,7 @@ def main():
         if flag_reservation:
             # Complete reservation
             LOGGER.info("* [{:<10}] (Start) set reservation.".format(task_name))
-            set_reservation(driver)
+            set_reservation(driver, task_name)
             LOGGER.info("* [{:<10}] (Done.) set reservation.".format(task_name))
             time.sleep(10)
 
