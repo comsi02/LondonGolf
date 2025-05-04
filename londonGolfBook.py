@@ -365,7 +365,7 @@ def set_reservation(driver: webdriver.Chrome, task_name: str) -> None:
     try:
         driver.refresh()
         driver.implicitly_wait(TIMEOUT)
-        time.sleep(5)
+        time.sleep(2)
 
         LOGGER.info("* [{:<10}] + reservation.: click shopping cart button".format(task_name))
 
@@ -381,15 +381,12 @@ def set_reservation(driver: webdriver.Chrome, task_name: str) -> None:
             EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))
         ).click()
 
-        LOGGER.info("* [{:<10}] + reservation.: window scroll to down".format(task_name))
-
-        # Scroll to bottom of page
-        driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
-
         LOGGER.info("* [{:<10}] + reservation.: click checkbox".format(task_name))
 
         # Click checkbox
-        driver.find_element(By.NAME, 'chb-nm').click()
+        WebDriverWait(driver, TIMEOUT).until(
+            EC.element_to_be_clickable((By.XPATH, '//*[@id="app-body"]/div/div[3]/div/div[2]/div/div[2]/div/div[2]/label'))
+        ).click()
 
         LOGGER.info("* [{:<10}] + reservation.: click the reservation button".format(task_name))
 
