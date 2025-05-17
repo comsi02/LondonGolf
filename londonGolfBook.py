@@ -288,7 +288,7 @@ def get_tee_times(course: str, date: str) -> List[Dict]:
         LOGGER.info("========== Error ==========")
         LOGGER.info(response.json() if 'response' in locals() else "No response")
         LOGGER.info("========== Error ==========")
-        raise TeeTimeError(f"Failed to get tee times: {str(e)}")
+        return []
 
 
 def set_shopping_cart(cart_session: str, tee_time_info: Dict) -> requests.Response:
@@ -302,25 +302,35 @@ def set_shopping_cart(cart_session: str, tee_time_info: Dict) -> requests.Respon
     Returns:
         API response
     """
+
+    rate = tee_time_info['rates'][0]
+
     data = {
         'item': {
-            'facilityId': tee_time_info['rates'][0]['golfnow']['GolfFacilityId'],
+            'facilityId': rate['golfnow']['GolfFacilityId'],
             'type': "TeeTime",
             'extra': {
                 'teetime': tee_time_info['teetime'],
-                'players': tee_time_info['maxPlayers'],
-                'price': int(tee_time_info['rates'][0]['greenFeeWalking'] / 100),
+                'players': rate['allowedPlayers'][-1],
+                'groupSize': 1,
+                'price': int(rate['greenFeeWalking'] / 100.0),
                 'rate': {
-                    'holes': tee_time_info['rates'][0]['holes'],
-                    'rateId': tee_time_info['rates'][0]['_id'],
-                    'rateSetId': tee_time_info['rates'][0]['golfnow']['GolfCourseId'],
-                    'name': tee_time_info['rates'][0]['name'],
-                    'transportation': 'Walking',
+                    'holes': rate['holes'],
+                    'rateId': rate['externalId'],
+                    'rateSetId': rate['golfnow']['GolfCourseId'],
+                    'name': rate['name'],
+                    'transactionFees': 0,
+                    'transportation': rate['name'],
+                    'isSimulator': rate['isSimulator']
                 },
                 'featuredProducts': []
             }
         }
     }
+
+    LOGGER.info("------------------------------")
+    LOGGER.info(data)
+    LOGGER.info("------------------------------")
 
     return requests.post(
         ENDPOINTS['cart_item'].format(cart_session), 
@@ -365,35 +375,27 @@ def set_reservation(driver: webdriver.Chrome, task_name: str) -> None:
     try:
         driver.refresh()
         driver.implicitly_wait(TIMEOUT)
-        time.sleep(2)
 
         LOGGER.info("* [{:<10}] + reservation.: click shopping cart button".format(task_name))
 
         # Click shopping cart button
-        WebDriverWait(driver, TIMEOUT).until(
-            EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-button']"))
-        ).click()
+        WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-button']"))).click()
 
         LOGGER.info("* [{:<10}] + reservation.: click checkout button".format(task_name))
 
-        # Click checkout button
-        WebDriverWait(driver, TIMEOUT).until(
-            EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))
-        ).click()
+        # click checkout
+        WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))).click()
 
         LOGGER.info("* [{:<10}] + reservation.: click checkbox".format(task_name))
 
-        # Click checkbox
-        WebDriverWait(driver, TIMEOUT).until(
-            EC.element_to_be_clickable((By.XPATH, '//*[@id="app-body"]/div/div[3]/div/div[2]/div/div[2]/div/div[2]/label'))
-        ).click()
+        driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
+        driver.find_element(By.NAME, 'chb-nm').click()
 
         LOGGER.info("* [{:<10}] + reservation.: click the reservation button".format(task_name))
 
         # Click reservation button
-        WebDriverWait(driver, TIMEOUT).until(
-            EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))
-        ).click()
+        WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))).click()
+
     except Exception as e:
         raise ReservationError(f"Failed to complete reservation: {str(e)}")
 
@@ -623,6 +625,8 @@ def main():
             task_name, login_session[:20], login_session[-20:]
         ))
 
+        LOGGER.info("* [{:<10}] (Debug) CPU count : {}".format( task_name, mp.cpu_count()))
+
         # Process booking schedules
         p = Pool(mp.cpu_count())
 
@@ -650,7 +654,7 @@ def main():
             LOGGER.info("* [{:<10}] (Start) set reservation.".format(task_name))
             set_reservation(driver, task_name)
             LOGGER.info("* [{:<10}] (Done.) set reservation.".format(task_name))
-            time.sleep(10)
+            time.sleep(TIMEOUT)
 
         LOGGER.info("")
         LOGGER.info("#---------------------------------------------------#")
