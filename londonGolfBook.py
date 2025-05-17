@@ -313,10 +313,10 @@ def set_shopping_cart(cart_session: str, tee_time_info: Dict) -> requests.Respon
                 'teetime': tee_time_info['teetime'],
                 'players': rate['allowedPlayers'][-1],
                 'groupSize': 1,
-                'price': int(rate['greenFeeWalking'] / 100.0),
+                'price': rate['greenFeeWalking'] / 100.0,
                 'rate': {
                     'holes': rate['holes'],
-                    'rateId': rate['externalId'],
+                    'rateId': rate['_id'],
                     'rateSetId': rate['golfnow']['GolfCourseId'],
                     'name': rate['name'],
                     'transactionFees': 0,
@@ -375,26 +375,25 @@ def set_reservation(driver: webdriver.Chrome, task_name: str) -> None:
     try:
         driver.refresh()
         driver.implicitly_wait(TIMEOUT)
-
-        LOGGER.info("* [{:<10}] + reservation.: click shopping cart button".format(task_name))
+        time.sleep(2)
 
         # Click shopping cart button
+        LOGGER.info("* [{:<10}] + reservation.: click shopping cart button".format(task_name))
         WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-button']"))).click()
 
-        LOGGER.info("* [{:<10}] + reservation.: click checkout button".format(task_name))
-
         # click checkout
+        LOGGER.info("* [{:<10}] + reservation.: click checkout button".format(task_name))
         WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='shopping-cart-drawer-checkout-btn']"))).click()
 
+        # click checkbox
         LOGGER.info("* [{:<10}] + reservation.: click checkbox".format(task_name))
-
         driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
         driver.find_element(By.NAME, 'chb-nm').click()
 
-        LOGGER.info("* [{:<10}] + reservation.: click the reservation button".format(task_name))
-
         # Click reservation button
+        LOGGER.info("* [{:<10}] + reservation.: click the reservation button".format(task_name))
         WebDriverWait(driver, TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='make-your-reservation-btn']"))).click()
+        LOGGER.info("* [{:<10}] + reservation.: completed.".format(task_name))
 
     except Exception as e:
         raise ReservationError(f"Failed to complete reservation: {str(e)}")
