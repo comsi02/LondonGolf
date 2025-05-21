@@ -22,7 +22,7 @@ from selenium.common.exceptions import TimeoutException
 from common import *
 
 # Constants
-TIMEOUT = 10
+TIMEOUT = 200
 BOOK_INTERVAL = 8
 MAX_WAIT_TEETIME = 100
 WEEKDAY = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
