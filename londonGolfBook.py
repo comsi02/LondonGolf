@@ -22,7 +22,7 @@ from selenium.common.exceptions import TimeoutException
 from common import *
 
 # Constants
-TIMEOUT = 200
+TIMEOUT = 20
 BOOK_INTERVAL = 8
 MAX_WAIT_TEETIME = 100
 WEEKDAY = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
@@ -399,6 +399,30 @@ def set_reservation(driver: webdriver.Chrome, task_name: str) -> None:
         raise ReservationError(f"Failed to complete reservation: {str(e)}")
 
 
+def set_reservation_with_retry(driver: webdriver.Chrome, task_name: str, max_retries: int = 5) -> None:
+    """
+    Complete the reservation process with retry logic.
+    
+    Args:
+        driver: Web driver
+        task_name: Task name for logging
+        max_retries: Maximum number of retry attempts
+    """
+    for attempt in range(max_retries):
+        try:
+            LOGGER.info("* [{:<10}] (Attempt {}/{}) Starting reservation process".format(task_name, attempt + 1, max_retries))
+            set_reservation(driver, task_name)
+            LOGGER.info("* [{:<10}] (Success) Reservation completed on attempt {}".format(task_name, attempt + 1))
+            return
+        except Exception as e:
+            if attempt < max_retries - 1:
+                LOGGER.info("* [{:<10}] (Attempt {}/{}) Failed: {}. Retrying...".format(task_name, attempt + 1, max_retries, str(e)))
+                time.sleep(1)  # Wait before retrying
+            else:
+                LOGGER.info("* [{:<10}] (Failed) All {} attempts failed. Last error: {}".format(task_name, max_retries, str(e)))
+                raise ReservationError(f"Failed to complete reservation after {max_retries} attempts: {str(e)}")
+
+
 def convert_tz(input_dt: Any, tz1: str, tz2: str) -> dt.datetime:
     """
     Convert timezone.
@@ -649,10 +673,10 @@ def main():
                 break
 
         if flag_reservation:
-            # Complete reservation
-            LOGGER.info("* [{:<10}] (Start) set reservation.".format(task_name))
-            set_reservation(driver, task_name)
-            LOGGER.info("* [{:<10}] (Done.) set reservation.".format(task_name))
+            # Complete reservation with retry logic
+            LOGGER.info("* [{:<10}] (Start) set reservation with retry.".format(task_name))
+            set_reservation_with_retry(driver, task_name)
+            LOGGER.info("* [{:<10}] (Done.) set reservation with retry.".format(task_name))
             time.sleep(TIMEOUT)
 
         LOGGER.info("")
