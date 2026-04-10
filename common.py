@@ -1,34 +1,15 @@
-# -*- coding:utf-8 -*-
+# -*- coding: utf-8 -*-
+"""Legacy helpers; prefer london_golf.logging_config and config_loader."""
+
+from london_golf.config_loader import load_config, resolve_default_config_path
+from london_golf.logging_config import get_logger
+
+
 def getLogger():
-  try:
-    import os, sys
-    import logging
-    from logging.handlers import TimedRotatingFileHandler
+    """Return the application logger (historical name for scripts)."""
+    return get_logger()
 
-    logFile = os.path.dirname(os.path.abspath(__file__)) + '/logs/' + os.path.splitext(os.path.basename(sys.argv[0]))[0] + '.log'
-
-    if not os.path.isdir(os.path.dirname(logFile)):
-        os.makedirs(os.path.dirname(logFile))
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
-    log_handler = TimedRotatingFileHandler(logFile, when='midnight', interval=1, backupCount=100)
-    log_handler.setFormatter(logging.Formatter("%(asctime)-15s,%(message)s"))
-    log_handler.suffix = "%Y%m%d"
-    logger.addHandler(log_handler)
-    return logger
-  except Exception as ex:
-    print(str(ex))
-
-def getLogStr(logA):
-  return ','.join(["%s"]*len(logA)) % tuple([str(x) for x in logA])
 
 def getConfig():
-  try:
-    import os, sys
-    import yaml
-    confFile = os.path.dirname(os.path.abspath(__file__)) + '/' + os.path.splitext(os.path.basename(sys.argv[0]))[0] + '.yaml'
-
-    with open(confFile, "r") as f:
-      return yaml.safe_load(f)
-  except yaml.YAMLError as ex:
-    print(str(ex))
+    """Load config from the default path (historical name for scripts)."""
+    return load_config(resolve_default_config_path())

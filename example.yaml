@@ -41,9 +41,10 @@ redis:
 #   - booking for every weekday : MON,TUE,WED,THU,FRI
 #   - booking for every weekend : SAT,SUN
 #   - booking for special days  : TUE,THU,SAT
-# settig of special day:
+# setting of special day:
 #   - input the date you want into book_date field
 #   - ex) book_date: 2023-09-11
+# weekday may be a comma-separated string or a YAML list, e.g. [MON, TUE, WED]
 #---------------------------------------------------------------------#
 schedule:
   pro_song:

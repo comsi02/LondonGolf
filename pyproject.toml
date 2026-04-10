@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "london-golf"
+version = "2.0.0"
+description = "Automated tee-time booking for City of London golf courses"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "packaging>=23.2",
+    "pyyaml>=6.0.2,<7",
+    "redis>=5.2,<6",
+    "requests>=2.32,<3",
+    "selenium>=4.27,<5",
+    "selenium-wire==5.1.0",
+    "pytz>=2024.2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["london_golf"]
+
+# selenium-wire's vendored mitmproxy imports blinker._saferef (removed in blinker 1.8+).
+[tool.uv]
+constraint-dependencies = ["blinker>=1.6.3,<1.8"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.0",
+    "pylint>=3.2.0",
+]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+src = ["london_golf", "."]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["london_golf"]
+
+# Pylance/Pyright: resolve third-party imports (e.g. selenium) from the project venv.
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.9"
+include = ["london_golf", "londonGolfBook.py", "common.py"]
+
+[tool.pylint.main]
+jobs = 0
+# Prefer running pylint with the project venv active; this adds .venv site-packages when present.
+init-hook = """
+import pathlib
+import sys
+_root = pathlib.Path(".").resolve()
+for _p in sorted((_root / ".venv").glob("lib/python*/site-packages"), reverse=True):
+    if _p.is_dir():
+        sys.path.insert(0, str(_p))
+        break
+"""
+
+[tool.pylint.basic]
+# Entry script keeps historical camelCase filename (londonGolfBook.py).
+module-rgx = "[a-zA-Z_][a-zA-Z0-9_]*$"
+good-names = ["getLogger", "getConfig"]
+
+[tool.pylint."messages control"]
+disable = [
+    "duplicate-code",
+]
