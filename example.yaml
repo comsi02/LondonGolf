@@ -37,20 +37,19 @@ redis:
     
 #---------------------------------------------------------------------#
 # setting of weekday:
-#   - booking for every day     : MON,TUE,WED,THU,FRI,SAT,SUN
-#   - booking for every weekday : MON,TUE,WED,THU,FRI
-#   - booking for every weekend : SAT,SUN
-#   - booking for special days  : TUE,THU,SAT
+#   - Empty weekday configurations automatically inherit from the nearest
+#     defined day below them (e.g., MON and TUE inherit from WED).
 # setting of special day:
 #   - input the date you want into book_date field
 #   - ex) book_date: 2023-09-11
-# weekday may be a comma-separated string or a YAML list, e.g. [MON, TUE, WED]
 #---------------------------------------------------------------------#
 schedule:
   pro_song:
     auth: userinfo1
-    tasks:
-      - weekday: MON,TUE,WED,THU,FRI,SAT,SUN
+    weekdays:
+      MON:
+      TUE:
+      WED:
         book_date:
         book_count: 1
         start_time: "14:00"
@@ -60,7 +59,10 @@ schedule:
           - TRAD
           - CLAS
           - QURY
-      - weekday: MON,TUE,WED,THU,FRI,SAT,SUN
+      THU:
+      FRI:
+      SAT:
+      SUN:
         book_date:
         book_count: 1
         start_time: "14:00"

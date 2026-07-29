@@ -1,192 +1,107 @@
-"""Selenium (selenium-wire) helpers: login, sessions, and checkout UI flow."""
+"""Playwright helpers: login, sessions, and checkout UI flow."""
 
-import contextlib
+import asyncio
 import logging
-import time
-from typing import Any, cast
+from typing import Tuple
 
-from selenium.common.exceptions import (
-    TimeoutException,
-    WebDriverException,
-)
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
-from seleniumwire import webdriver
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import Page
 
-from london_golf.constants import ENDPOINTS, TIMEOUT
+from london_golf.constants import ENDPOINTS
 from london_golf.exceptions import (
     AuthenticationError,
     CartError,
     ReservationError,
 )
 
-
-def _driver_page_brief(driver: webdriver.Chrome) -> str:
-    """Best-effort URL/title for logs when a step fails."""
-    try:
-        return f"url={driver.current_url!r} title={driver.title!r}"
-    except WebDriverException:
-        return "url/title: unreadable (session may be invalid)"
+logger = logging.getLogger("london_golf")
 
 
-def _format_webdriver_error(
-    exc: BaseException, *, max_stacktrace_chars: int = 1200
-) -> str:
-    """Readable Selenium error; str(exc) often has empty Message: but huge stack."""
-    lines = [f"exception_type={type(exc).__name__}"]
-    if not isinstance(exc, WebDriverException):
-        lines.append(str(exc))
-        return "\n".join(lines)
-
-    wde = cast(WebDriverException, exc)
-    lines.append(f"driver_msg={wde.msg!r}")
-    if wde.stacktrace:
-        joined = (
-            "\n".join(wde.stacktrace)
-            if isinstance(wde.stacktrace, (list, tuple))
-            else str(wde.stacktrace)
-        )
-        if len(joined) > max_stacktrace_chars:
-            joined = (
-                joined[:max_stacktrace_chars]
-                + "\n… [stacktrace truncated for log length]"
-            )
-        lines.append("stacktrace:\n" + joined)
-    if wde.screen:
-        lines.append(
-            "screenshot: captured by driver (base64 omitted from logs)"
-        )
-    return "\n".join(lines)
-
-
-def quit_driver_safely(driver: Any) -> None:
-    """Quit driver; ignore WebDriverException if session is gone."""
-    with contextlib.suppress(WebDriverException):
-        driver.quit()
-
-
-def get_driver(is_headless: bool = False) -> webdriver.Chrome:
-    """Create Chrome webdriver; optional headless; selenium-wire enabled."""
-    options = webdriver.ChromeOptions()
-    if is_headless:
-        options.add_argument("--headless")
-    return webdriver.Chrome(options=options, seleniumwire_options={})
-
-
-def do_login(
-    driver: webdriver.Chrome,
+async def do_login_and_get_sessions(
+    page: Page,
     login_url: str,
     login_uid: str,
     login_pwd: str,
-) -> None:
-    """Fill login form and submit."""
+) -> Tuple[str, str]:
+    """Fill login form, submit, and intercept Session and cart identifiers."""
+    login_session = ""
+    cart_session = ""
+
+    async def handle_request(request):
+        nonlocal login_session, cart_session
+        headers = request.headers
+
+        # Extract Session token from any request that has it
+        if not login_session and "session" in headers:
+            login_session = headers["session"]
+
+        # Extract cart session id
+        if ENDPOINTS["cart"] in request.url:
+            cart_session = request.url.split("/")[-1]
+
+    page.on("request", handle_request)
+
     try:
-        driver.set_window_size(500, 1000)
-        driver.get(login_url)
-        driver.implicitly_wait(TIMEOUT)
-        WebDriverWait(driver, TIMEOUT).until(
-            EC.presence_of_element_located(
-                (By.XPATH, "//input[@data-testid='login-email-component']")
-            )
-        ).send_keys(login_uid)
-        WebDriverWait(driver, TIMEOUT).until(
-            EC.presence_of_element_located(
-                (By.XPATH, "//input[@data-testid='login-password-component']")
-            )
-        ).send_keys(login_pwd)
-        WebDriverWait(driver, TIMEOUT).until(
-            EC.element_to_be_clickable(
-                (By.XPATH, "//button[@data-testid='login-button']")
-            )
-        ).click()
-    except (WebDriverException, TimeoutException) as exc:
+        await page.set_viewport_size({"width": 500, "height": 1000})
+        await page.goto(login_url, wait_until="domcontentloaded")
+
+        await page.fill("[data-testid='login-email-component']", login_uid)
+        await page.fill("[data-testid='login-password-component']", login_pwd)
+        await page.click("[data-testid='login-button']")
+
+        # Wait until we see a successful navigation
+        await page.wait_for_load_state("domcontentloaded")
+        await asyncio.sleep(2)
+
+        # If cart session is not found, force a refresh or navigation to trigger it
+        if not cart_session:
+            await page.reload(wait_until="domcontentloaded")
+
+        # Wait a bit if it's still not populated
+        for _ in range(10):
+            if login_session and cart_session:
+                break
+            await asyncio.sleep(0.5)
+
+    except PlaywrightError as exc:
         raise AuthenticationError(f"Login failed: {exc}") from exc
 
+    if not login_session:
+        raise AuthenticationError("Could not get login session")
+    if not cart_session:
+        raise CartError("Could not get cart session")
 
-def get_cart_session_request(
-    driver: webdriver.Chrome, logger: logging.Logger
-) -> Any:
-    """Wait for course/cart network calls; return the cart request object."""
-    try:
-        driver.wait_for_request(ENDPOINTS["course"], TIMEOUT)
-        driver.refresh()
-        return driver.wait_for_request(ENDPOINTS["cart"], TIMEOUT)
-    except TimeoutException as exc:
-        logger.info("* Exception occurred: %s", exc)
-        raise CartError(f"Failed to get cart session request: {exc}") from exc
+    return login_session, cart_session
 
 
-def get_cart_session(driver: webdriver.Chrome, logger: logging.Logger) -> str:
-    """Extract shopping-cart session id from the captured cart request path."""
-    return get_cart_session_request(driver, logger).path.split("/")[-1]
-
-
-def get_login_session(driver: webdriver.Chrome) -> str:
-    """Read Session header from a successful captured request."""
-    for request in driver.requests:
-        if (
-            request.response
-            and request.response.status_code == 200
-            and request.headers.get("Session")
-        ):
-            return request.headers["Session"]
-    raise AuthenticationError("Could not get login session")
-
-
-def set_reservation(driver: webdriver.Chrome, task_name: str) -> None:
+async def set_reservation(page: Page, task_name: str) -> None:
     """Checkout: cart, checkout, waiver checkbox, confirm reservation."""
+    tn = f"{task_name:<10}"
     try:
-        driver.refresh()
-        driver.implicitly_wait(TIMEOUT)
-        time.sleep(2)
-        logger = logging.getLogger("london_golf")
-        tn = f"{task_name:<10}"
+        await page.reload(wait_until="domcontentloaded")
+        await asyncio.sleep(2)
+
         logger.info("* [%s] + reservation.: click shopping cart button", tn)
-        WebDriverWait(driver, TIMEOUT).until(
-            EC.element_to_be_clickable(
-                (By.XPATH, "//button[@data-testid='shopping-cart-button']")
-            )
-        ).click()
+        await page.click("[data-testid='shopping-cart-button']")
+
         logger.info("* [%s] + reservation.: click checkout button", tn)
-        WebDriverWait(driver, TIMEOUT).until(
-            EC.element_to_be_clickable(
-                (
-                    By.XPATH,
-                    "//button[@data-testid="
-                    "'shopping-cart-drawer-checkout-btn']",
-                )
-            )
-        ).click()
+        await page.click("[data-testid='shopping-cart-drawer-checkout-btn']")
+
         logger.info("* [%s] + reservation.: click checkbox", tn)
-        driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
-        driver.find_element(By.NAME, "chb-nm").click()
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await page.click("input[name='chb-nm']")
+
         logger.info("* [%s] + reservation.: click the reservation button", tn)
-        WebDriverWait(driver, TIMEOUT).until(
-            EC.element_to_be_clickable(
-                (
-                    By.XPATH,
-                    "//button[@data-testid='make-your-reservation-btn']",
-                )
-            )
-        ).click()
+        await page.click("[data-testid='make-your-reservation-btn']")
+
         logger.info("* [%s] + reservation.: completed.", tn)
-    except (WebDriverException, TimeoutException) as exc:
-        detail = "\n".join(
-            (
-                "Failed to complete reservation UI step.",
-                _driver_page_brief(driver),
-                _format_webdriver_error(exc),
-            )
-        )
+    except PlaywrightError as exc:
+        detail = f"Failed to complete reservation UI step. url={page.url}\nError: {exc}"
         raise ReservationError(detail) from exc
 
 
-def set_reservation_with_retry(
-    driver: webdriver.Chrome, task_name: str, max_retries: int = 5
-) -> None:
+async def set_reservation_with_retry(page: Page, task_name: str, max_retries: int = 5) -> None:
     """Run `set_reservation` with retries on transient UI failures."""
-    logger = logging.getLogger("london_golf")
     tn = f"{task_name:<10}"
     for attempt in range(max_retries):
         try:
@@ -196,7 +111,7 @@ def set_reservation_with_retry(
                 attempt + 1,
                 max_retries,
             )
-            set_reservation(driver, task_name)
+            await set_reservation(page, task_name)
             logger.info(
                 "* [%s] (Success) Reservation completed on attempt %s",
                 tn,
@@ -212,7 +127,7 @@ def set_reservation_with_retry(
                     max_retries,
                     exc,
                 )
-                time.sleep(1)
+                await asyncio.sleep(1)
             else:
                 logger.info(
                     "* [%s] (Failed) All %s attempts failed. Last error: %s",
@@ -221,6 +136,5 @@ def set_reservation_with_retry(
                     exc,
                 )
                 raise ReservationError(
-                    f"Failed to complete reservation after {max_retries} "
-                    f"attempts: {exc}"
+                    f"Failed to complete reservation after {max_retries} attempts: {exc}"
                 ) from exc

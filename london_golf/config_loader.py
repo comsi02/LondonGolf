@@ -1,13 +1,64 @@
-"""Load YAML configuration and resolve default config path."""
+"""Load YAML configuration and resolve default config path using Pydantic."""
 
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import yaml
+from pydantic import BaseModel, ValidationError, model_validator
 
 from london_golf.exceptions import ConfigError
+
+
+class CourseConfig(BaseModel):
+    code: int
+    name: str
+
+
+class AuthConfig(BaseModel):
+    userid: str
+    password: str
+
+
+class RedisConfig(BaseModel):
+    host: str
+    port: int
+
+
+class TaskScheduleRow(BaseModel):
+    book_date: Optional[str] = None
+    book_count: int = 1
+    start_time: str
+    duration: int = 30
+    buffer: int = 0
+    course: Union[str, List[str]]
+
+
+class ScheduleTaskConfig(BaseModel):
+    auth: Optional[str] = None
+    weekdays: Dict[str, Optional[TaskScheduleRow]]
+
+    @model_validator(mode="after")
+    def inherit_empty_weekdays(self):
+        last_valid = None
+        for day in reversed(list(self.weekdays.keys())):
+            if self.weekdays[day] is not None:
+                last_valid = self.weekdays[day]
+            else:
+                if last_valid is None:
+                    raise ValueError(
+                        f"Cannot inherit settings for '{day}': no subsequent configuration found."
+                    )
+                self.weekdays[day] = last_valid
+        return self
+
+
+class AppConfig(BaseModel):
+    course: Dict[str, CourseConfig]
+    authentication: Dict[str, AuthConfig]
+    redis: Optional[RedisConfig] = None
+    schedule: Dict[str, ScheduleTaskConfig]
 
 
 def resolve_default_config_path() -> Path:
@@ -21,8 +72,8 @@ def resolve_default_config_path() -> Path:
     return repo_root / f"{stem}.yaml"
 
 
-def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
-    """Load and validate YAML config. Raises ConfigError on failure."""
+def load_config(path: Optional[Path] = None) -> AppConfig:
+    """Load and validate YAML config via Pydantic. Raises ConfigError on failure."""
     config_path = path or resolve_default_config_path()
     if not config_path.is_file():
         raise ConfigError(f"Config file not found: {config_path}")
@@ -33,83 +84,35 @@ def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
         raise ConfigError(f"Cannot read config {config_path}: {e}") from e
     except yaml.YAMLError as e:
         raise ConfigError(f"Invalid YAML in {config_path}: {e}") from e
+
     if not isinstance(data, dict):
         raise ConfigError(f"Config root must be a mapping: {config_path}")
-    return data
 
-
-def get_task_schedule_entries(
-    config: Dict[str, Any], task_name: str
-) -> List[Dict[str, Any]]:
-    """Return schedule rows for ``task_name``.
-
-    Supports:
-
-    - **Nested** (``example.yaml``): ``schedule.<task>: {auth: ..., tasks: [ ... ]}``
-    - **Legacy list**: ``schedule.<task>: [ {weekday: ...}, ... ]``
-    """
     try:
-        block = config["schedule"][task_name]
-    except KeyError as exc:
-        raise ConfigError(f"Unknown schedule task: {task_name}") from exc
-    except TypeError as exc:
-        raise ConfigError("'schedule' must be a mapping of task names") from exc
-
-    if isinstance(block, list):
-        return block
-    if isinstance(block, dict):
-        if "tasks" in block:
-            tasks = block["tasks"]
-            if not isinstance(tasks, list):
-                raise ConfigError(
-                    f"schedule.{task_name}.tasks must be a list"
-                )
-            return tasks
-    raise ConfigError(
-        f"schedule.{task_name} must be a list of entries, or "
-        f"{{auth: ..., tasks: [...]}}"
-    )
+        return AppConfig(**data)
+    except ValidationError as e:
+        raise ConfigError(f"Configuration validation failed:\n{e}") from e
 
 
-def get_task_credentials(
-    config: Dict[str, Any], task_name: str
-) -> Tuple[str, str]:
-    """Return ``(userid, password)`` for ``task_name``.
+def get_task_schedule_entries(config: AppConfig, task_name: str) -> Dict[str, TaskScheduleRow]:
+    """Return schedule weekday mapping for ``task_name``."""
+    if task_name not in config.schedule:
+        raise ConfigError(f"Unknown schedule task: {task_name}")
 
-    Supports:
+    block = config.schedule[task_name]
+    return block.weekdays
 
-    - **Indirect auth** (``example.yaml``): ``schedule.<task>.auth`` names a key
-      under ``authentication``.
-    - **Per-task credentials** (legacy): ``authentication.<task>`` holds
-      ``userid`` / ``password`` and ``schedule.<task>`` is a bare list.
-    """
-    try:
-        block = config["schedule"][task_name]
-    except KeyError as exc:
-        raise ConfigError(f"Unknown schedule task: {task_name}") from exc
 
-    auth_map = config.get("authentication")
-    if not isinstance(auth_map, dict):
-        raise ConfigError("'authentication' must be a mapping")
+def get_task_credentials(config: AppConfig, task_name: str) -> Tuple[str, str]:
+    """Return ``(userid, password)`` for ``task_name``."""
+    if task_name not in config.schedule:
+        raise ConfigError(f"Unknown schedule task: {task_name}")
 
-    if isinstance(block, dict) and "auth" in block:
-        auth_key = block["auth"]
-        if auth_key not in auth_map:
-            raise ConfigError(f"Unknown authentication key: {auth_key}")
-        creds = auth_map[auth_key]
-    elif task_name not in auth_map:
-        raise ConfigError(
-            f"No credentials for task {task_name!r}: add "
-            f"authentication.{task_name} or schedule.{task_name}.auth"
-        )
-    else:
-        creds = auth_map[task_name]
+    block = config.schedule[task_name]
+    auth_key = block.auth if block.auth else task_name
 
-    if not isinstance(creds, dict):
-        raise ConfigError(f"Invalid credential entry for task {task_name!r}")
-    try:
-        return creds["userid"], creds["password"]
-    except KeyError as exc:
-        raise ConfigError(
-            "Credentials need 'userid' and 'password' keys"
-        ) from exc
+    if auth_key not in config.authentication:
+        raise ConfigError(f"Unknown authentication key: {auth_key}")
+
+    creds = config.authentication[auth_key]
+    return creds.userid, creds.password

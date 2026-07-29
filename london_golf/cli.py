@@ -1,55 +1,31 @@
-"""CLI: parse args, login, run schedules, finalize reservation."""
-
-import warnings
-
-# macOS system Python often uses LibreSSL; urllib3 v2 warns but still works.
-# https://github.com/urllib3/urllib3/issues/3020
-warnings.filterwarnings(
-    "ignore",
-    message=r"urllib3 v2 only supports OpenSSL",
-)
+"""CLI: parse args, login, run schedules, finalize reservation (Async)."""
 
 import argparse
+import asyncio
+import datetime as dt
 import logging
-import multiprocessing as mp
 import sys
-import time
 import traceback
-from dataclasses import dataclass
-from multiprocessing import Pool
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+
+import httpx
+from playwright.async_api import async_playwright
 
 from london_golf.browser import (
-    do_login,
-    get_cart_session,
-    get_driver,
-    get_login_session,
-    quit_driver_safely,
+    do_login_and_get_sessions,
     set_reservation_with_retry,
 )
 from london_golf.config_loader import (
+    AppConfig,
     get_task_credentials,
     get_task_schedule_entries,
     load_config,
     resolve_default_config_path,
 )
-from london_golf.constants import ENDPOINTS, TIMEOUT
+from london_golf.constants import BOOK_INTERVAL, ENDPOINTS, TIMEOUT, WEEKDAY
 from london_golf.exceptions import ConfigError
 from london_golf.logging_config import get_logger
 from london_golf.schedule import get_book_schedule
-
-
-@dataclass(frozen=True)
-class ScheduleRunContext:
-    """One task's schedule list: sequential or pooled workers."""
-
-    config: Dict[str, Any]
-    task_name: str
-    cart_session: str
-    login_session: str
-    workers: int
-    sequential: bool
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:
@@ -58,165 +34,50 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         description="London Golf Booking batch job",
     )
     parser.add_argument(
-        "-d",
-        "--debug",
-        required=True,
-        choices=["yes", "no"],
-        help="yes = show browser, no = headless",
+        "task",
+        help="Schedule task name (e.g. pro_song)",
     )
     parser.add_argument(
-        "-t",
-        "--task",
-        required=True,
-        help="Schedule task name",
+        "--headless",
+        action="store_true",
+        help="Run the browser in background without showing the UI",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Skip checkout (dry run mode)",
     )
     parser.add_argument(
         "-c",
         "--config",
         type=Path,
         default=None,
-        help=(
-            "YAML config path (default: londonGolfBook.yaml in repo "
-            "or LONDON_GOLF_CONFIG)"
-        ),
-    )
-    parser.add_argument(
-        "--sequential",
-        action="store_true",
-        help=(
-            "Run schedule tasks in-process (one session; no parallel API)"
-        ),
+        help="YAML config path",
     )
     parser.add_argument(
         "--workers",
         type=int,
         default=None,
         metavar="N",
-        help="Pool size for parallel schedule workers (default: CPU count)",
+        help="Ignored in asyncio mode (all tasks run concurrently)",
     )
     return parser
 
 
-def _resolve_worker_count(sequential: bool, workers_arg: Optional[int]) -> int:
-    if sequential:
-        return 1
-    return workers_arg if workers_arg is not None else mp.cpu_count()
-
-
-def _load_config_or_exit(config_path: Path) -> Dict[str, Any]:
+def _load_config_or_exit(config_path: Path) -> AppConfig:
     try:
         return load_config(config_path)
     except ConfigError as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
-        sys.exit(1)
 
 
-def _run_schedules(ctx: ScheduleRunContext) -> bool:
-    log = logging.getLogger("london_golf")
-    tasks = get_task_schedule_entries(ctx.config, ctx.task_name)
-    found = False
-    log.info(
-        "[DEBUG] run_schedules task=%r rows=%s workers=%s sequential=%s",
-        ctx.task_name,
-        len(tasks),
-        ctx.workers,
-        ctx.sequential,
+def _log_phase_banner(logger: logging.Logger, task_name: str, *, start: bool) -> None:
+    label = "START" if start else "END"
+    logger.info(
+        "[%s] -------------------------------- %s --------------------------------",
+        task_name,
+        label,
     )
-
-    if ctx.sequential or ctx.workers <= 1:
-        for row_idx, schedule_info in enumerate(tasks, start=1):
-            log.info(
-                "[DEBUG] row %s/%s start keys=%s",
-                row_idx,
-                len(tasks),
-                sorted(schedule_info.keys()),
-            )
-            result = get_book_schedule(
-                schedule_info,
-                ctx.task_name,
-                ctx.cart_session,
-                ctx.login_session,
-                ctx.config,
-            )
-            log.info(
-                "[DEBUG] row %s/%s done selected_slots=%s",
-                row_idx,
-                len(tasks),
-                len(result),
-            )
-            if result:
-                found = True
-                break
-        return found
-
-    log.info(
-        "[DEBUG] pool start workers=%s jobs=%s (blocking .get() runs inside "
-        "context so logs match real order)",
-        ctx.workers,
-        len(tasks),
-    )
-    with Pool(ctx.workers) as pool:
-        async_results = [
-            pool.apply_async(
-                get_book_schedule,
-                (
-                    si,
-                    ctx.task_name,
-                    ctx.cart_session,
-                    ctx.login_session,
-                    ctx.config,
-                ),
-            )
-            for si in tasks
-        ]
-        log.info(
-            "[DEBUG] pool apply_async done queued=%s — next: .get() per job",
-            len(async_results),
-        )
-        for job_i, async_result in enumerate(async_results, start=1):
-            log.info(
-                "[DEBUG] pool job %s/%s: AsyncResult.get() (blocks until worker "
-                "returns or raises)",
-                job_i,
-                len(async_results),
-            )
-            try:
-                result = async_result.get()
-            except Exception:  # pylint: disable=broad-exception-caught
-                log.exception(
-                    "[DEBUG] pool job %s/%s failed in worker",
-                    job_i,
-                    len(async_results),
-                )
-                raise
-            n_slots = len(result) if isinstance(result, list) else None
-            log.info(
-                "[DEBUG] pool job %s/%s returned type=%s len=%s",
-                job_i,
-                len(async_results),
-                type(result).__name__,
-                n_slots,
-            )
-            for _ in result:
-                found = True
-                break
-            if found:
-                break
-        log.info("[DEBUG] pool collected results early_exit=%s", found)
-
-    log.info("[DEBUG] pool closed (context exited) found=%s", found)
-    return found
-
-
-def _log_phase_banner(logger, *, start: bool) -> None:
-    logger.info("")
-    logger.info("#---------------------------------------------------#")
-    if start:
-        logger.info("#                     START                         #")
-    else:
-        logger.info("#                      END                          #")
-    logger.info("#---------------------------------------------------#")
-    logger.info("")
 
 
 def _log_traceback(logger: logging.Logger, traceback_msg: str) -> None:
@@ -229,122 +90,106 @@ def _log_traceback(logger: logging.Logger, traceback_msg: str) -> None:
     print(sep, file=sys.stderr)
 
 
-def _open_browser_session(
-    debug_mode: bool,
-    login_uid: str,
-    login_pwd: str,
+async def _run_schedules_async(
+    client: httpx.AsyncClient,
+    config: AppConfig,
     task_name: str,
-    logger: logging.Logger,
-) -> Tuple[Any, str, str]:
-    task_col = f"{task_name:<10}"
-    logger.info(
-        "[DEBUG] opening browser headless=%s login_url=%s",
-        not debug_mode,
-        ENDPOINTS["login"],
-    )
-    driver = get_driver(not debug_mode)
-    logger.info("[DEBUG] logging in as %s", login_uid)
-    do_login(driver, ENDPOINTS["login"], login_uid, login_pwd)
-    logger.info("* [%s] (Done.) login : %s", task_col, login_uid)
-    cart_session = get_cart_session(driver, logger)
-    logger.info(
-        "* [%s] (Done.) get cart session : %s",
-        task_col,
-        cart_session,
-    )
-    login_session = get_login_session(driver)
-    logger.info(
-        "* [%s] (Done.) get login session : %s...%s",
-        task_col,
-        login_session[:20],
-        login_session[-20:],
-    )
-    return driver, cart_session, login_session
-
-
-def _finalize_schedules_and_checkout(
-    logger: logging.Logger,
-    args: argparse.Namespace,
-    config: Dict[str, Any],
-    task_name: str,
-    driver: Any,
+    tasks_dict: dict,
     cart_session: str,
     login_session: str,
-) -> None:
-    workers = _resolve_worker_count(args.sequential, args.workers)
-    task_col = f"{task_name:<10}"
+    logger: logging.Logger,
+) -> bool:
+    found = False
+
+    target_date = dt.datetime.now() + dt.timedelta(days=BOOK_INTERVAL)
+    default_target = WEEKDAY[target_date.weekday()]
+
     logger.info(
-        "* [%s] workers=%s sequential=%s cpu_count=%s",
-        task_col,
-        workers,
-        args.sequential,
-        mp.cpu_count(),
+        "[%s] Target booking date: %s (%s)",
+        task_name,
+        target_date.strftime("%Y-%m-%d"),
+        default_target,
     )
-    ctx = ScheduleRunContext(
-        config=config,
-        task_name=task_name,
-        cart_session=cart_session,
-        login_session=login_session,
-        workers=workers,
-        sequential=args.sequential,
-    )
-    if _run_schedules(ctx):
-        logger.info("* [%s] (Start) set reservation with retry.", task_col)
-        set_reservation_with_retry(driver, task_name)
-        logger.info("* [%s] (Done.) set reservation with retry.", task_col)
-        time.sleep(TIMEOUT)
-    else:
-        logger.info(
-            "[DEBUG] task=%r: no slot locked/carted — check weekday, time "
-            "window, API empty responses, lock/cart HTTP status in logs above",
-            task_name,
+
+    for weekday, schedule_info in tasks_dict.items():
+        # If no explicit book_date override, only execute the default target weekday
+        if not schedule_info.book_date and weekday != default_target:
+            continue
+
+        result = await get_book_schedule(
+            client, schedule_info, task_name, cart_session, login_session, config, weekday
         )
-        logger.info(
-            "* [%s] Skip checkout (nothing in cart from workers).",
-            task_col,
-        )
-    _log_phase_banner(logger, start=False)
+        if result:
+            found = True
+            break
+    return found
+
+
+async def async_main() -> None:
+    logger = get_logger()
+    args = _build_argument_parser().parse_args()
+    cfg_path = args.config or resolve_default_config_path()
+    config = _load_config_or_exit(cfg_path)
+    task_name = args.task
+    _log_phase_banner(logger, task_name, start=True)
+
+    logger.info("[%s] Initializing... Headless: %s", task_name, args.headless)
+    login_uid, login_pwd = get_task_credentials(config, task_name)
+
+    is_headless = args.headless
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=is_headless)
+        context = await browser.new_context()
+        page = await context.new_page()
+
+        try:
+            logger.info("[%s] Authenticating as %s...", task_name, login_uid)
+            login_session, cart_session = await do_login_and_get_sessions(
+                page, ENDPOINTS["login"], login_uid, login_pwd
+            )
+            logger.info(
+                "[%s] Acquired login session: %s...%s",
+                task_name,
+                login_session[:10],
+                login_session[-10:],
+            )
+            logger.info("[%s] Acquired cart session: %s", task_name, cart_session)
+
+            tasks_dict = get_task_schedule_entries(config, task_name)
+            logger.info("[%s] Loaded %s scheduled tasks", task_name, len(tasks_dict))
+
+            async with httpx.AsyncClient() as client:
+                found = await _run_schedules_async(
+                    client, config, task_name, tasks_dict, cart_session, login_session, logger
+                )
+
+            if found:
+                if not args.dry_run:
+                    logger.info("[%s] Executing checkout sequence...", task_name)
+                    await set_reservation_with_retry(page, task_name)
+                    logger.info("[%s] Checkout sequence completed successfully.", task_name)
+                    await asyncio.sleep(TIMEOUT)
+                else:
+                    logger.info("[%s] --dry-run active. Skipping actual checkout.", task_name)
+            else:
+                logger.info("[%s] No tee times locked. Skipping checkout.", task_name)
+
+        except Exception:
+            traceback_msg = f"Traceback: {traceback.format_exc()}"
+            _log_traceback(logger, traceback_msg)
+        finally:
+            await context.close()
+            await browser.close()
+            logger.info("[%s] Session closed.", task_name)
+            _log_phase_banner(logger, task_name, start=False)
 
 
 def main() -> None:
-    """Load config, sessions, workers; checkout if a slot was found."""
-    logger = get_logger()
-    driver = None
     try:
-        args = _build_argument_parser().parse_args()
-        cfg_path = args.config or resolve_default_config_path()
-        config = _load_config_or_exit(cfg_path)
-        task_name = args.task
-        logger.info(
-            "[DEBUG] config_path=%s task=%r debug=%s",
-            cfg_path,
-            task_name,
-            args.debug,
-        )
-        login_uid, login_pwd = get_task_credentials(config, task_name)
-        _log_phase_banner(logger, start=True)
-        driver, cart_session, login_session = _open_browser_session(
-            args.debug == "yes", login_uid, login_pwd, task_name, logger
-        )
-        _finalize_schedules_and_checkout(
-            logger,
-            args,
-            config,
-            task_name,
-            driver,
-            cart_session,
-            login_session,
-        )
-
-    except ConfigError as exc:
-        print(f"[ERROR] {exc}", file=sys.stderr)
+        asyncio.run(async_main())
+    except KeyboardInterrupt:
         sys.exit(1)
-    except Exception:  # pylint: disable=broad-exception-caught
-        traceback_msg = f"Traceback: {traceback.format_exc()}"
-        _log_traceback(logger, traceback_msg)
-    finally:
-        if driver is not None:
-            quit_driver_safely(driver)
 
 
 if __name__ == "__main__":

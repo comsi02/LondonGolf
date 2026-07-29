@@ -37,13 +37,13 @@ def get_logger():
         encoding="utf-8",
     )
     handler.suffix = "%Y%m%d"
-    handler.setFormatter(logging.Formatter("%(asctime)-15s,%(message)s"))
+    handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-7s | %(message)s"))
     logger.addHandler(handler)
     log_stderr = os.environ.get("LONDON_GOLF_LOG_STDERR", "").lower()
     if log_stderr in ("1", "true", "yes"):
         stream_handler = logging.StreamHandler(sys.stderr)
         stream_handler.setFormatter(
-            logging.Formatter("%(asctime)-15s,%(levelname)s,%(message)s")
+            logging.Formatter("%(asctime)s | %(levelname)-7s | %(message)s")
         )
         logger.addHandler(stream_handler)
 

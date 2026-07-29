@@ -13,9 +13,7 @@ from london_golf.constants import LOCAL_CACHE_FILE
 class CacheManager:
     """Deduplicate tee times: Redis if configured, else local JSON."""
 
-    def __init__(
-        self, config: Dict[str, Any], logger: logging.Logger
-    ) -> None:
+    def __init__(self, config: Dict[str, Any], logger: logging.Logger) -> None:
         self._logger = logger
         self.use_redis = False
         self.redis_connection = None
@@ -23,11 +21,7 @@ class CacheManager:
         self.cache_data: Dict[str, Any] = {}
 
         redis_cfg = config.get("redis") or {}
-        if (
-            isinstance(redis_cfg, dict)
-            and "host" in redis_cfg
-            and "port" in redis_cfg
-        ):
+        if isinstance(redis_cfg, dict) and "host" in redis_cfg and "port" in redis_cfg:
             try:
                 self.redis_connection = redis.Redis(
                     host=redis_cfg["host"],
@@ -39,8 +33,7 @@ class CacheManager:
                 self._logger.info("Using Redis for caching")
             except (redis.exceptions.RedisError, OSError, ValueError) as exc:
                 self._logger.info(
-                    "Redis connection failed: %s. "
-                    "Using local file cache instead.",
+                    "Redis connection failed: %s. Using local file cache instead.",
                     exc,
                 )
                 self.use_redis = False
@@ -49,13 +42,10 @@ class CacheManager:
             try:
                 with open(self.cache_file, encoding="utf-8") as file_handle:
                     self.cache_data = json.load(file_handle)
-                self._logger.info(
-                    "Loaded local cache from %s", self.cache_file
-                )
+                self._logger.info("Loaded local cache from %s", self.cache_file)
             except (OSError, json.JSONDecodeError, TypeError) as exc:
                 self._logger.info(
-                    "Failed to load local cache: %s. "
-                    "Starting with empty cache.",
+                    "Failed to load local cache: %s. Starting with empty cache.",
                     exc,
                 )
                 self.cache_data = {}
@@ -74,9 +64,7 @@ class CacheManager:
         else:
             self.cache_data[key] = value
             try:
-                with open(
-                    self.cache_file, "w", encoding="utf-8"
-                ) as file_handle:
+                with open(self.cache_file, "w", encoding="utf-8") as file_handle:
                     json.dump(self.cache_data, file_handle)
             except (OSError, TypeError) as exc:
                 self._logger.info("Failed to save local cache: %s", exc)
@@ -88,9 +76,7 @@ class CacheManager:
         elif key in self.cache_data:
             del self.cache_data[key]
             try:
-                with open(
-                    self.cache_file, "w", encoding="utf-8"
-                ) as file_handle:
+                with open(self.cache_file, "w", encoding="utf-8") as file_handle:
                     json.dump(self.cache_data, file_handle)
             except (OSError, TypeError) as exc:
                 self._logger.info("Failed to save local cache: %s", exc)
