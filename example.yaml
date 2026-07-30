@@ -54,7 +54,7 @@ schedule:
         book_count: 1
         start_time: "14:00"
         duration: 60
-        buffer: 0
+        slot: 0
         course:
           - TRAD
           - CLAS
@@ -67,7 +67,7 @@ schedule:
         book_count: 1
         start_time: "14:00"
         duration: 60
-        buffer: 0        
+        slot: 0        
         course:
           - QURY
           - QURY

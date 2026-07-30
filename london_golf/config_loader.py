@@ -31,7 +31,7 @@ class TaskScheduleRow(BaseModel):
     book_count: int = 1
     start_time: str
     duration: int = 30
-    buffer: int = 0
+    slot: int = 0
     course: Union[str, List[str]]
 
 

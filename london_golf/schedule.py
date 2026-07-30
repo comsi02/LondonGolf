@@ -55,11 +55,7 @@ def _apply_time_window(
     schedule_info: TaskScheduleRow, book_date: str, state: Dict[str, Any]
 ) -> None:
     """Populate UTC/Eastern booking window fields into state dictionary."""
-    buf_hi = schedule_info.buffer + 1
-    state["bufferTime"] = secrets.randbelow(buf_hi)
-    start_utc = convert_tz_eastern_to_utc(
-        f"{book_date} {schedule_info.start_time}:00"
-    ) + dt.timedelta(minutes=state["bufferTime"])
+    start_utc = convert_tz_eastern_to_utc(f"{book_date} {schedule_info.start_time}:00")
     state["bookStartTimeUtc"] = start_utc
 
     dur_m = schedule_info.duration
@@ -87,13 +83,13 @@ def _log_schedule_dump(
 ) -> None:
     """Log a clean summary of the resolved schedule_info."""
     log.info(
-        "[%s] Target configuration: Course: %s (%s) | Window: %s-%s EST | Buffer: %s min",
+        "[%s] Target configuration: Course: %s (%s) | Window: %s-%s EST | Target Slot Offset: %s",
         task_column.strip(),
         state.get("picked_course"),
         state.get("courseName"),
         state["bookStartTimeEastern"].strftime("%H:%M"),
         state["bookEndTimeEastern"].strftime("%H:%M"),
-        state.get("bufferTime"),
+        state.get("slot_offset"),
     )
 
 
@@ -140,52 +136,33 @@ class _TeeSearchContext:
 
 async def _process_tee_candidate(
     ctx: _TeeSearchContext,
-    tee_time_info: Dict[str, Any],
+    t_ctx: Dict[str, Any],
     selected: List[Dict[str, Any]],
 ) -> bool:
-    raw_tt = tee_time_info["teetime"]
-    parsed = dt.datetime.strptime(raw_tt, "%Y-%m-%dT%H:%M:%S.000Z")
-    tee_time = convert_tz_utc_to_utc(parsed.strftime("%Y-%m-%d %H:%M:%S"))
-    eastern = convert_tz_utc_to_eastern(tee_time)
-
+    tee_time_info = t_ctx["raw"]
+    eastern = t_ctx["eastern"]
+    east_hm = t_ctx["east_hm"]
+    validation_key = t_ctx["validation_key"]
     picked = ctx.state["picked_course"]
-    east_hm = eastern.strftime("%H:%M")
     task = ctx.task_column.strip()
 
-    start_u = ctx.state["bookStartTimeUtc"]
-    end_u = ctx.state["bookEndTimeUtc"]
-    if not (start_u <= tee_time <= end_u):
-        ctx.log.info("[%s]   - %s (%s) : Out of time window (Skipping)", task, east_hm, picked)
-        return False
+    ctx.state["teeTimeEastern"] = eastern.strftime("%Y-%m-%d %H:%M")
+    tee_time_info["scheduleInfo"] = ctx.state
+    selected.append(tee_time_info)
+    ctx.cache.set(validation_key, "OK", 300)
 
-    rate_id = tee_time_info["rates"][0]["_id"]
-    east_key = eastern.strftime("%Y-%m-%d %H:%M:%S")
-    validation_key = f"{rate_id}:{east_key}"
-    cached = ctx.cache.get(validation_key)
-    book_cap = ctx.schedule_info.book_count
+    ctx.log.info("[%s]   - %s (%s) : >>> SELECTED! <<<", task, east_hm, picked)
+    ctx.log.info("[%s] Executing lock+cart sequence for %s...", task, east_hm)
+    lock_res = await set_lock_tee_time(ctx.client, ctx.login_session, tee_time_info, ctx.log)
+    cart_res = await set_shopping_cart(ctx.client, ctx.cart_session, tee_time_info, ctx.log)
 
-    if len(selected) < book_cap and cached is None:
-        ctx.state["teeTimeEastern"] = eastern.strftime("%Y-%m-%d %H:%M")
-        tee_time_info["scheduleInfo"] = ctx.state
-        selected.append(tee_time_info)
-        ctx.cache.set(validation_key, "OK", 300)
-
-        ctx.log.info("[%s]   - %s (%s) : >>> SELECTED! <<<", task, east_hm, picked)
-        ctx.log.info("[%s] Executing lock+cart sequence for %s...", task, east_hm)
-        lock_res = await set_lock_tee_time(ctx.client, ctx.login_session, tee_time_info, ctx.log)
-        cart_res = await set_shopping_cart(ctx.client, ctx.cart_session, tee_time_info, ctx.log)
-
-        ctx.log.info(
-            "[%s] Sequence complete. Lock: HTTP %s | Cart: HTTP %s",
-            task,
-            lock_res.status_code,
-            cart_res.status_code,
-        )
-        return True
-
-    if cached is not None:
-        ctx.log.info("[%s]   - %s (%s) : Cached (Skipping)", task, east_hm, picked)
-    return False
+    ctx.log.info(
+        "[%s] Sequence complete. Lock: HTTP %s | Cart: HTTP %s",
+        task,
+        lock_res.status_code,
+        cart_res.status_code,
+    )
+    return True
 
 
 async def _search_tee_times(ctx: _TeeSearchContext) -> List[Dict[str, Any]]:
@@ -207,27 +184,91 @@ async def _search_tee_times(ctx: _TeeSearchContext) -> List[Dict[str, Any]]:
                     MAX_WAIT_TEETIME,
                 )
         else:
+            start_u = ctx.state["bookStartTimeUtc"]
+            end_u = ctx.state["bookEndTimeUtc"]
+
+            valid_candidates = []
+
+            for t in tee_times:
+                parsed = dt.datetime.strptime(t["teetime"], "%Y-%m-%dT%H:%M:%S.000Z")
+                tee_time = convert_tz_utc_to_utc(parsed.strftime("%Y-%m-%d %H:%M:%S"))
+
+                if not (start_u <= tee_time <= end_u):
+                    continue
+
+                eastern = convert_tz_utc_to_eastern(tee_time)
+                east_hm = eastern.strftime("%H:%M")
+
+                rate_id = t["rates"][0]["_id"]
+                east_key = eastern.strftime("%Y-%m-%d %H:%M:%S")
+                validation_key = f"{rate_id}:{east_key}"
+                cached = ctx.cache.get(validation_key)
+
+                valid_candidates.append(
+                    {
+                        "raw": t,
+                        "eastern": eastern,
+                        "east_hm": east_hm,
+                        "validation_key": validation_key,
+                        "cached": cached,
+                    }
+                )
+
             ctx.log.info(
-                "[%s] Polling API (Attempt %s/%s) - Discovered %s available tee times:",
+                "[%s] Polling API (Attempt %s/%s) - Discovered %s tee times in time window.",
                 ctx.task_column.strip(),
                 idx,
                 MAX_WAIT_TEETIME,
-                len(tee_times),
+                len(valid_candidates),
             )
 
-        for tee_time_info in tee_times:
-            if await _process_tee_candidate(ctx, tee_time_info, selected):
-                flag_tee_time = False
+            for c in valid_candidates:
+                if c["cached"]:
+                    ctx.log.info(
+                        "[%s]   - %s (%s) : Cached (Skipping)",
+                        ctx.task_column.strip(),
+                        c["east_hm"],
+                        ctx.state["picked_course"],
+                    )
+                else:
+                    ctx.log.info(
+                        "[%s]   - %s (%s) : Available",
+                        ctx.task_column.strip(),
+                        c["east_hm"],
+                        ctx.state["picked_course"],
+                    )
 
-        if tee_times:
-            _log_tee_scan_outcome(
-                ctx.log,
-                ctx.task_column,
-                ctx.worker_id,
-                ctx.state["picked_course"],
-                not flag_tee_time,
-            )
-            break
+            fresh_candidates = [c for c in valid_candidates if not c["cached"]]
+
+            if fresh_candidates:
+                book_count = ctx.schedule_info.book_count
+                slot = ctx.state["slot_offset"]
+
+                max_start_idx = max(0, len(fresh_candidates) - book_count)
+                actual_start_idx = min(slot, max_start_idx)
+
+                targets = fresh_candidates[actual_start_idx : actual_start_idx + book_count]
+
+                ctx.log.info(
+                    "[%s] Targeting %s consecutive slots starting from index %s (Random slot was %s).",
+                    ctx.task_column.strip(),
+                    len(targets),
+                    actual_start_idx,
+                    slot,
+                )
+
+                for t_ctx in targets:
+                    if await _process_tee_candidate(ctx, t_ctx, selected):
+                        flag_tee_time = False
+
+                _log_tee_scan_outcome(
+                    ctx.log,
+                    ctx.task_column,
+                    ctx.worker_id,
+                    ctx.state["picked_course"],
+                    not flag_tee_time,
+                )
+                break
 
         await asyncio.sleep(1)
 
@@ -264,6 +305,8 @@ async def get_book_schedule(
         return []
 
     _pick_course_fields(schedule_info, config, state)
+    state["slot_offset"] = secrets.randbelow(schedule_info.slot + 1)
+
     _log_schedule_dump(task_column, worker_id, state, log)
 
     search_ctx = _TeeSearchContext(
