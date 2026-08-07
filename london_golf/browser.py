@@ -76,25 +76,25 @@ async def do_login_and_get_sessions(
 
 async def set_reservation(page: Page, task_name: str) -> None:
     """Checkout: cart, checkout, waiver checkbox, confirm reservation."""
-    tn = f"{task_name:<10}"
+    tn = task_name.strip()
     try:
         await page.reload(wait_until="domcontentloaded")
         await asyncio.sleep(2)
 
-        logger.info("* [%s] + reservation.: click shopping cart button", tn)
+        logger.info("[%s] + reservation.: click shopping cart button", tn)
         await page.click("[data-testid='shopping-cart-button']")
 
-        logger.info("* [%s] + reservation.: click checkout button", tn)
+        logger.info("[%s] + reservation.: click checkout button", tn)
         await page.click("[data-testid='shopping-cart-drawer-checkout-btn']")
 
-        logger.info("* [%s] + reservation.: click checkbox", tn)
+        logger.info("[%s] + reservation.: click checkbox", tn)
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await page.click("input[name='chb-nm']")
 
-        logger.info("* [%s] + reservation.: click the reservation button", tn)
+        logger.info("[%s] + reservation.: click the reservation button", tn)
         await page.click("[data-testid='make-your-reservation-btn']")
 
-        logger.info("* [%s] + reservation.: completed.", tn)
+        logger.info("[%s] + reservation.: completed.", tn)
     except PlaywrightError as exc:
         detail = f"Failed to complete reservation UI step. url={page.url}\nError: {exc}"
         raise ReservationError(detail) from exc
@@ -102,18 +102,18 @@ async def set_reservation(page: Page, task_name: str) -> None:
 
 async def set_reservation_with_retry(page: Page, task_name: str, max_retries: int = 5) -> None:
     """Run `set_reservation` with retries on transient UI failures."""
-    tn = f"{task_name:<10}"
+    tn = task_name.strip()
     for attempt in range(max_retries):
         try:
             logger.info(
-                "* [%s] (Attempt %s/%s) Starting reservation process",
+                "[%s] (Attempt %s/%s) Starting reservation process",
                 tn,
                 attempt + 1,
                 max_retries,
             )
             await set_reservation(page, task_name)
             logger.info(
-                "* [%s] (Success) Reservation completed on attempt %s",
+                "[%s] (Success) Reservation completed on attempt %s",
                 tn,
                 attempt + 1,
             )
@@ -121,7 +121,7 @@ async def set_reservation_with_retry(page: Page, task_name: str, max_retries: in
         except ReservationError as exc:
             if attempt < max_retries - 1:
                 logger.info(
-                    "* [%s] (Attempt %s/%s) Failed: %s. Retrying...",
+                    "[%s] (Attempt %s/%s) Failed: %s. Retrying...",
                     tn,
                     attempt + 1,
                     max_retries,
@@ -130,7 +130,7 @@ async def set_reservation_with_retry(page: Page, task_name: str, max_retries: in
                 await asyncio.sleep(1)
             else:
                 logger.info(
-                    "* [%s] (Failed) All %s attempts failed. Last error: %s",
+                    "[%s] (Failed) All %s attempts failed. Last error: %s",
                     tn,
                     max_retries,
                     exc,

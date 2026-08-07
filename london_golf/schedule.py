@@ -102,8 +102,8 @@ def _weekday_allowed(
         log.info("[DEBUG] weekday gate OK target=%s", weekday_code)
         return True
     log.info(
-        "* [%s] [%s] Target day is %s. Skipping.",
-        task_column,
+        "[%s] [%s] Target day is %s. Skipping.",
+        task_column.strip(),
         worker_id,
         weekday_code,
     )
